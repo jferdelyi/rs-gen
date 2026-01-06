@@ -1,0 +1,14 @@
+[workspace]
+members = ["rs-gen-core",
+    "rs-gen-server",
+    "rs-gen-ui",
+    "rs-gen-core"
+]
+resolver = "3"
+
+[profile.release]
+opt-level = 3            # Maximum optimization
+lto = "fat"              # Aggressive link-time optimization
+strip = true             # Strip debug symbols
+panic = "abort"          # Slightly faster
+

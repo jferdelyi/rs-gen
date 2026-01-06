@@ -1,0 +1,9 @@
+[package]
+name = "rs-gen-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rs-gen-core = { path = "../rs-gen-core" }
+serde = { version = "1.0.228", features = ["derive"] }
+actix-web = "4"

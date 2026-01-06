@@ -1,0 +1,10 @@
+[package]
+name = "rs-gen-ui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+reqwest = { version = "0.13.1", features = ["blocking", "query"] }
+eframe = "0.33.3"
+egui = "0.33.3"
+env_logger = "0.11.8"
