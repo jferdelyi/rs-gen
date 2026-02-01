@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Generator Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>Generator Dashboard</h1>
+    <div class="main-container">
+        <!-- Left configuration panel -->
+        <div class="config-panel">
+            <div class="section">
+                <h2>Generation Parameters</h2>
+                <div class="slider-container">
+                    <div class="slider-label"><span>Randomness</span><span id="randomness-val">0.1</span></div>
+                    <input type="range" id="randomness-slider" min="0" max="1" step="0.01" value="0.1">
+                </div>
+
+                <div class="slider-container">
+                    <div class="slider-label"><span>Max n</span><span id="maxn-val">0</span></div>
+                    <input type="range" id="maxn-slider" min="0" max="100" step="1" value="0">
+                </div>
+
+                <div class="slider-container">
+                    <div class="slider-label"><span>Nb try</span><span id="nbtry-val">1</span></div>
+                    <input type="range" id="nbtry-slider" min="1" max="100" step="1" value="1">
+                </div>
+
+                <div class="slider-container">
+                    <label><input type="checkbox" id="reduce-random"> Reduce randomness</label>
+                </div>
+
+                <div class="radio-container">
+                    <h3>Start Seed</h3>
+                    <label><input type="radio" name="seed" value="none" checked> None</label><br>
+                    <label>
+                        <input type="radio" name="seed" value="custom"> Custom:
+                        <input type="text" id="custom-seed" placeholder="Enter text" disabled>
+                    </label><br>
+                    <label>
+                        <input type="radio" name="seed" value="random"> Random n:
+                        <input type="number" id="random-seed" value="2" min="2" disabled>
+                    </label>
+                </div>
+
+                <div class="section">
+                    <h2>Model Intensities</h2>
+                    <div id="models">Loading models...</div>
+                </div>
+
+                <button id="predict-btn">Generate</button>
+            </div>
+        </div>
+
+        <!-- Center/right output panel -->
+        <div class="output-panel">
+            <div class="section">
+                <h3>Command URL</h3>
+                <div id="command">Waiting...</div>
+            </div>
+
+            <div class="section">
+                <h3>Last Prediction</h3>
+                <div id="result">Prediction will appear here</div>
+            </div>
+
+            <div class="section">
+                <h3>History</h3>
+                <div id="history"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

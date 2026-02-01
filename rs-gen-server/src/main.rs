@@ -1,62 +1,95 @@
 use std::sync::Mutex;
 
-use actix_web::{get, put, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, web, App, HttpResponse, HttpServer, Responder, http};
+use actix_cors::Cors;
 
+use rs_gen_core::model::generator::Generator;
+use rs_gen_core::model::prediction_input::StartSeed;
 use serde::Deserialize;
-use rs_gen_core::io::list_files;
-use rs_gen_core::model::multigram_model::{MultiGramModel, StartSeed};
 
-/// Struct representing query parameters for the `/v1/generate` endpoint
+/// Query parameters for the `/v1/generate` endpoint
 #[derive(Deserialize)]
 struct GenerateParams {
+	/// Maximum n-gram size to use (optional; default 0 = auto)
 	max_n: Option<usize>,
+	/// Number of attempts to avoid duplicates (optional; default 5)
 	nb_try: Option<usize>,
+	/// Randomness factor [0.0, 1.0] for choosing shorter n-grams
 	randomness: Option<f32>,
+	/// Whether to reduce randomness progressively
 	reduce_random: Option<bool>,
-	seed: Option<String> // -> random(n) if 0 random ngram too, custom(str) or none
+	/// Seed string controlling the starting prefix
+	/// Formats: "none", "custom:<string>", "random:<n-gram>"
+	seed: Option<String>,
+	/// Per-model intensity weights, format: "name1:0.5,name2:0.25"
+	intensity: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct ModelQuery {
-	names: Option<String>
-}
-
+/// Shared application state for Actix, wrapping the generator in a Mutex
 struct SharedData {
-	model: MultiGramModel
+	model: Generator,
 }
 
 impl GenerateParams {
-	/// Determines the starting seed strategy for sequence generation.
-	fn start_seed(&self) -> Result<StartSeed<'_>, String> {
-		match &self.seed {
-			None => Ok(StartSeed::False),
-			Some(s) if s.to_lowercase() == "none" => Ok(StartSeed::False),
-			Some(s) if s.to_lowercase().starts_with("custom:") => {
+	/// Computes the starting seed strategy for sequence generation
+	///
+	/// # Returns
+	/// - `StartSeed::False` if no seed is specified or "none"
+	/// - `StartSeed::Custom(s)` if "custom:<s>" is provided
+	/// - `StartSeed::Random(n)` if "random:<n>" is provided
+	///
+	/// # Errors
+	/// Returns a `String` describing invalid formats or values
+	fn start_seed(&self) -> Result<StartSeed, String> {
+		let seed : String = match &self.seed  {
+			None => return Ok(StartSeed::False),
+			Some(s) => s.to_lowercase()
+		};
+
+		match seed {
+			s if s == "none" => Ok(StartSeed::False),
+			s if s.starts_with("custom:") => {
 				let value = &s["custom:".len()..];
 				if value.is_empty() {
-					Err("Custom seed cannot be empty".into())
-				} else {
-					Ok(StartSeed::Custom(value))
+					return Err("Custom seed cannot be empty".into());
+				}
+				match value.parse::<String>() {
+					Err(_) => Err("Custom seed must be a valid UTF-8 string".into()),
+					Ok(_) => Ok(StartSeed::Custom(value.to_owned()))
 				}
 			}
-			Some(s) if s.to_lowercase().starts_with("random:") => {
+			s if s.starts_with("random:") => {
 				let value = &s["random:".len()..];
+				if value.is_empty() {
+					return Err("Random seed cannot be empty".into());
+				}
 				match value.parse::<usize>() {
 					Ok(n) => Ok(StartSeed::Random(n)),
 					Err(_) => Err("Random seed must be an integer".into()),
 				}
 			}
-			Some(_) => Err("Seed must start with 'custom:' or 'random:' or be 'none'".into()),
+			_ => Err("Seed must start with 'custom:', 'random:', or be 'none'".into()),
 		}
 	}
 }
 
-/// HTTP GET endpoint `/v1/generate`
+/// HTTP GET `/v1/generate` endpoint
 ///
-/// Generates a sequence using the GlobalNGramModel based on query parameters.
-/// Returns a generated sequence as the response body.
+/// Generates a sequence from loaded models based on query parameters.
+/// Handles randomness, number of attempts, seed selection, and per-model intensity.
+///
+/// # Query Parameters
+/// - See `GenerateParams` struct
+///
+/// # Returns
+/// - 200 OK with generated sequence
+/// - 400 BadRequest if parameters are invalid
+/// - 500 InternalServerError if the model is unavailable or mutex lock fails
 #[get("/v1/generate")]
-async fn get_generated(data: web::Data<Mutex<SharedData>>, query: web::Query<GenerateParams>) -> impl Responder {
+async fn get_generated(
+	data: web::Data<Mutex<SharedData>>,
+	query: web::Query<GenerateParams>,
+) -> impl Responder {
 	let max_n = query.max_n.unwrap_or(0);
 	let nb_try = query.nb_try.unwrap_or(5);
 	let randomness = query.randomness.unwrap_or(0.1);
@@ -64,7 +97,7 @@ async fn get_generated(data: web::Data<Mutex<SharedData>>, query: web::Query<Gen
 
 	let start_seed = match query.start_seed() {
 		Ok(s) => s,
-		Err(e) => return HttpResponse::BadRequest().body(e)
+		Err(e) => return HttpResponse::BadRequest().body(e),
 	};
 
 	let mut shared_data = match data.lock() {
@@ -72,22 +105,45 @@ async fn get_generated(data: web::Data<Mutex<SharedData>>, query: web::Query<Gen
 		Err(_) => return HttpResponse::InternalServerError().body("Model lock failed"),
 	};
 
-	match shared_data.model.predict(max_n, nb_try, randomness, reduce_random, &start_seed) {
+	// Prepare prediction input
+	let mut input = shared_data.model.make_prediction_input();
+	input.max_n = max_n;
+	input.nb_try = nb_try;
+	if let Err(e) = input.set_randomness(randomness) {
+		return HttpResponse::BadRequest().body(e);
+	}
+	input.reduce_random = reduce_random;
+	input.start_seed = start_seed;
+
+	// Parse intensity query like "name1:0.5,name2:0.25"
+	if let Some(intensity_str) = &query.intensity {
+		for data in intensity_str.split(',') {
+			let split: Vec<&str> = data.split(':').collect();
+			if split.len() != 2 {
+				return HttpResponse::BadRequest().body(format!("Invalid intensity format: {}", data));
+			}
+			let model_name = split[0];
+			let intensity = match split[1].parse::<f32>() {
+				Ok(i) => i,
+				Err(_) => return HttpResponse::BadRequest().body(format!("Invalid intensity value: {}", split[1])),
+			};
+			if let Err(e) = input.set_model_intensity(model_name, intensity) {
+				return HttpResponse::BadRequest().body(e);
+			}
+		}
+	}
+
+	match shared_data.model.predict(&input) {
 		Ok(result) => HttpResponse::Ok().body(result),
 		Err(e) => HttpResponse::InternalServerError().body(e),
 	}
 }
 
+/// HTTP GET `/v1/models` endpoint
+///
+/// Returns a newline-separated list of all loaded model names.
 #[get("/v1/models")]
-async fn get_models() -> impl Responder {
-	match list_files(&"./data".to_owned(), "dat") {
-		Ok(files) => HttpResponse::Ok().body(files.join("\n").replace(".dat", "")),
-		Err(_) => HttpResponse::InternalServerError().body("Failed to list models")
-	}
-}
-
-#[get("/v1/loaded_models")]
-async fn get_loaded_models(data: web::Data<Mutex<SharedData>>) -> impl Responder {
+async fn get_models(data: web::Data<Mutex<SharedData>>) -> impl Responder {
 	let shared_data = match data.lock() {
 		Ok(m) => m,
 		Err(_) => return HttpResponse::InternalServerError().body("Model lock failed"),
@@ -95,63 +151,35 @@ async fn get_loaded_models(data: web::Data<Mutex<SharedData>>) -> impl Responder
 	HttpResponse::Ok().body(shared_data.model.get_model_names().join("\n"))
 }
 
-#[put("/v1/load_models")]
-async fn put_model(data: web::Data<Mutex<SharedData>>, query: web::Query<ModelQuery>) -> impl Responder {
-	let mut shared_data = match data.lock() {
-		Ok(m) => m,
-		Err(_) => return HttpResponse::InternalServerError().body("Model lock failed"),
-	};
-
-	let query_names = match &query.names {
-		Some(s) if !s.trim().is_empty() => s.trim(),
-		_ => return HttpResponse::BadRequest().body("Missing or empty model name"),
-	};
-
-	let model_names: Vec<&str> = query_names
-		.split(',')
-		.map(|s| s.trim())
-		.filter(|s| !s.is_empty())
-		.collect();
-
-	shared_data.model = MultiGramModel::default();
-	for name in model_names {
-		let model_path = format!("./data/{}.dat", name);
-		let partial_model = match MultiGramModel::new(model_path) {
-			Ok(m) => m,
-			Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to load model: {e}"))
-		};
-		match shared_data.model.merge(&partial_model) {
-			Ok(_) => (),
-			Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to merge model: {e}"))
-		}
-	}
-
-	HttpResponse::Ok().body("Models loaded successfully")
-}
-
-/// Main entry point for the server.
+/// Main entry point for the Actix web server
 ///
-/// Loads the n-gram model, wraps it in a `Mutex` for thread safety,
-/// and starts an Actix-web HTTP server with a single endpoint.
+/// Loads the generator, wraps it in a mutex, and starts an HTTP server.
 ///
 /// # Notes
-/// - The server binds to 127.0.0.1:5000.
-/// - Currently, the model file path is hardcoded and should be made configurable.
-/// - WIP: Additional endpoints, error handling, and logging may be added.
+/// - Binds to 127.0.0.1:5000
+/// - Currently, a model path is hardcoded; should be configurable in the future
+/// - Handles concurrency via `Mutex`
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-	let shared_data = SharedData {
-		model: MultiGramModel::default(),
+	let generator = match Generator::new("./data") {
+		Ok(g) => g,
+		Err(e) => panic!("Failed to load model: {}", e),
 	};
+
+	let shared_data = SharedData { model: generator };
 	let shared_model = web::Data::new(Mutex::new(shared_data));
 
 	HttpServer::new(move || {
 		App::new()
+			.wrap(
+				Cors::default()
+					.allow_any_origin()
+					.allowed_methods(vec!["GET", "POST", "OPTIONS"])
+					.allowed_header(http::header::CONTENT_TYPE)
+			)
 			.app_data(shared_model.clone())
 			.service(get_generated)
 			.service(get_models)
-			.service(put_model)
-			.service(get_loaded_models)
 	})
 		.bind(("127.0.0.1", 5000))?
 		.run()

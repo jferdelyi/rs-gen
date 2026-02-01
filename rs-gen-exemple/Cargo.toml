@@ -1,0 +1,7 @@
+[package]
+name = "rs-gen-exemple"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rs-gen-core = { path = "../rs-gen-core" }

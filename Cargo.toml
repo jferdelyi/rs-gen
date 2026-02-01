@@ -1,7 +1,7 @@
 [workspace]
 members = ["rs-gen-core",
     "rs-gen-server",
-    "rs-gen-ui",
+    "rs-gen-exemple",
     "rs-gen-core"
 ]
 resolver = "3"

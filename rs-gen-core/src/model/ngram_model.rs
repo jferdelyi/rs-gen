@@ -9,20 +9,21 @@ use std::collections::HashMap;
 /// and allows probabilistic prediction of the next character
 /// based on learned sequences.
 ///
-/// ## Responsibilities
-/// - Build the n-gram model from sentences or words
-/// - Accumulate transition occurrences for each state
+/// # Responsibilities
+/// - Build the n-gram model from sentences, words, or phrases
+/// - Accumulate transition counts for each state
 /// - Predict the next character given a prefix
 /// - Merge with another n-gram model of the same order `n`
 ///
-/// ## Invariants
+/// # Invariants
 /// - `n` is always >= 2
 /// - Each state in `states` corresponds to a unique prefix of length `n-1`
-/// - All state transitions are counted as occurrences >= 1
+/// - All state transitions have occurrence counts >= 1
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NGramModel {
 	/// The order of the model (number of characters in the n-gram)
-	n: usize, // >= 2
+	n: usize, // must be >= 2
+
 	/// Mapping from a prefix (length n-1) to its corresponding state
 	states: HashMap<String, State>,
 }
@@ -47,25 +48,29 @@ impl NGramModel {
 		self.states.keys().choose(&mut rand::rng()).cloned()
 	}
 
-	/// Adds a sentence (or word / short phrase) to the model.
+	/// Adds a sentence, word, or short phrase to the model.
 	///
-	/// Breaks the sentence into n-grams and updates states with observed transitions.
+	/// Breaks the input into n-grams and updates states with observed transitions.
 	///
 	/// # Notes
-	/// - Converts all characters to lowercase ASCII for consistency.
+	/// - Converts all characters to lowercase for consistency.
 	/// - Ignores sentences shorter than `n`.
 	pub fn add_sentence(&mut self, sentence: &str) {
 		let chars: Vec<char> = sentence.chars().collect();
 		if chars.len() < self.n {
-			// Too short sentence, no n-grams to compute
+			// Sentence too shorts, no n-grams to compute
 			return;
 		}
 
-		// For each n-gram
+		// For each n-gram in the sentence
 		for i in 0..=chars.len() - self.n {
 			// Get the prefix and the next character
-			let prefix: String = chars[i..i + self.n - 1].iter().map(|c| c.to_ascii_lowercase()).collect();
-			let next_char = chars[i + self.n - 1].to_ascii_lowercase();
+			let prefix: String = chars[i..i + self.n - 1]
+				.iter()
+				.flat_map(|c| c.to_lowercase())
+				.collect();
+			// Should not panic
+			let next_char = chars[i + self.n - 1].to_lowercase().next().unwrap();
 
 			// Get or create the state for this prefix
 			let state = self.states.entry(prefix.clone()).or_insert_with(|| State::new(&prefix));
@@ -75,17 +80,21 @@ impl NGramModel {
 
 	/// Predicts the next character given a prefix.
 	///
-	/// Returns `None` if the prefix is unknown or no transitions exist.
+	/// Returns `None` if the prefix is unknown or has no transitions.
 	///
 	/// # Notes
-	/// - Converts the prefix to lowercase ASCII to match stored states.
+	/// - Converts the prefix to lowercase to match stored states.
 	pub fn predict(&self, prefix: &str) -> Option<char> {
-		let key = prefix.chars().map(|c| c.to_ascii_lowercase()).collect::<String>();
+		let key: String = prefix
+			.chars()
+			.flat_map(|c| c.to_lowercase())
+			.collect();
 		self.states.get(&key)?.predict()
 	}
 
 	/// Merges another n-gram model into this one.
 	///
+	/// # Notes
 	/// - Both models must have the same order `n`.
 	/// - Occurrence counts for matching states and transitions are summed.
 	///
