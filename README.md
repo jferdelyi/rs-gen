@@ -157,5 +157,3 @@ Features:
 * visualization of generated words
 
 The UI is deliberately minimal and may evolve over time.
-
-MIT (unless stated otherwise).
