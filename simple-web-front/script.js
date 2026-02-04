@@ -104,10 +104,20 @@ btn.addEventListener('click', async () => {
             .map(([name, val]) => `${encodeURIComponent(name)}:${val}`)
             .join(',');
 
-        let seedQuery = 'none';
-        if (startSeed === 'custom') seedQuery = `custom:${encodeURIComponent(customSeedInput.value)}`;
-        else if (startSeed === 'random') seedQuery = `random:${parseInt(randomSeedInput.value)}`;
+        const selectedSeed = document.querySelector('input[name="seed"]:checked')?.value ?? 'none';
 
+        console.log(selectedSeed)
+        let seedQuery = 'none';
+
+        if (selectedSeed === 'custom') {
+            seedQuery = `custom:${encodeURIComponent(customSeedInput.value)}`;
+        }
+        else if (selectedSeed === 'random') {
+            seedQuery = `random:${parseInt(randomSeedInput.value)}`;
+        }
+        else if (selectedSeed === 'full-random') {
+            seedQuery = 'random:0';
+        }
         const url = `${BASE_URL}/v1/generate?max_n=${max_n}&nb_try=${nb_try}&randomness=${randomness}&reduce_random=${reduceRandomCheckbox.checked}&seed=${seedQuery}&intensity=${intensityQuery}`;
 
         commandDiv.textContent = url;
