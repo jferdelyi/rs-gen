@@ -106,7 +106,6 @@ btn.addEventListener('click', async () => {
 
         const selectedSeed = document.querySelector('input[name="seed"]:checked')?.value ?? 'none';
 
-        console.log(selectedSeed)
         let seedQuery = 'none';
 
         if (selectedSeed === 'custom') {
