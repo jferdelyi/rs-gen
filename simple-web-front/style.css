@@ -1,93 +1,263 @@
-/* Reset and font */
+/* =========================
+   Base Layout
+========================= */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 body {
-    font-family: 'Arial', sans-serif;
-    margin: 0;
-    padding: 1rem;
-    background: #f5f7fa;
-    color: #333;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #f5f5f7;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  height: 100dvh;
+  padding-top: 1rem;
+  overflow-x: hidden;
 }
 
-h1 { text-align: center; margin-bottom: 2rem; }
-
-.main-container {
-    display: flex;
-    gap: 1.5rem;
+.app {
+  width: 100%;
+  max-width: 600px;
 }
 
-/* Configuration panel on the left */
-.config-panel {
-    width: 300px;
-    min-width: 250px;
+/* =========================
+   Card
+========================= */
+.card {
+  background: #fff;
+  padding: 2rem;
+  border-radius: 28px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
-/* Output panel takes the remaining space */
-.output-panel {
-    flex: 1;
+/* =========================
+   Terminal
+========================= */
+.terminal {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: "Menlo", "Consolas", monospace;
+  font-size: 14px;
+  padding: 16px;
+  border-radius: 12px;
+  height: 320px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-/* Sections */
-.section {
-    background: #fff;
-    border-radius: 8px;
-    padding: 1rem;
-    margin-bottom: 1rem;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+.terminal-line {
+  white-space: pre;
 }
 
-/* Sliders */
-.slider-container {
-    margin-bottom: 1rem;
+.terminal-muted {
+  color: #8b949e;
+  margin-bottom: 6px;
 }
 
-.slider-label {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 0.3rem;
-    font-weight: 600;
+.terminal-user {
+  color: #3fb950;
+  font-weight: 600;
+}
+
+.terminal-path {
+  color: #a371f7;
+}
+
+/* =========================
+   Buttons
+========================= */
+.primary-btn {
+  padding: 0.6rem 1.2rem;
+  border-radius: 14px;
+  border: none;
+  background: black;
+  color: white;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s;
+}
+
+.primary-btn:hover {
+  background: #222;
+}
+
+.primary-btn:active {
+  transform: scale(0.98);
+}
+
+.primary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.action-btn {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #30363d;
+  background: #161b22;
+  color: #c9d1d9;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s;
+}
+
+.action-btn:hover:not(:disabled) {
+  background: #21262d;
+}
+
+.action-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* =========================
+   Form Elements
+========================= */
+.input-group {
+  margin-bottom: 1.2rem;
+}
+
+.label-title {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-weight: 500;
 }
 
 input[type="range"] {
-    width: 100%;
+  width: 100%;
 }
 
-/* Inputs */
-input[type="number"], input[type="text"] {
-    width: 70px;
-    margin-left: 0.5rem;
-    padding: 0.2rem 0.3rem;
-    border-radius: 4px;
-    border: 1px solid #ccc;
+input[type="number"],
+input[type="text"] {
+  width: 100%;
+  padding: 0.4rem;
+  border-radius: 6px;
+  border: 1px solid #ccc;
 }
 
-/* Buttons */
-button {
-    width: 100%;
+input[type="radio"],
+input[type="checkbox"] {
+  transform: scale(1.1);
+}
+
+/* Slider inline */
+.slider-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.slider-inline input[type="range"] {
+  flex: 1;
+}
+
+.slider-value {
+  min-width: 50px;
+  text-align: right;
+  font-weight: 600;
+}
+
+/* =========================
+   Seed Options
+========================= */
+#seed-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.seed-option {
+  display: grid;
+  grid-template-columns: 24px 1fr minmax(50px, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.seed-option input[type="text"],
+.seed-option input[type="number"] {
+  width: 100%;
+  min-width: 0;
+}
+
+/* =========================
+   Modal
+========================= */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(8px);
+  z-index: 10;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 1rem;
+}
+
+.modal-content {
+  background: #fff;
+  padding: 1rem;
+  border-radius: 28px;
+  width: 100%;
+  max-width: 500px;
+  margin: 2rem auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  overflow-x: hidden;
+}
+
+/* =========================
+   Utilities
+========================= */
+.hidden {
+  display: none;
+}
+
+.hidden-slider {
+  display: none;
+}
+
+/* =========================
+   Responsive
+========================= */
+@media (max-width: 600px) {
+  .card {
+    padding: 1rem;
+  }
+
+  .terminal {
+    height: 60dvh;
+  }
+
+  .modal-content {
+    padding: 1rem;
+    max-width: 100%;
+  }
+
+  input[type="number"],
+  input[type="text"] {
     padding: 0.6rem;
-    font-size: 1rem;
-    font-weight: bold;
-    border: none;
-    border-radius: 6px;
-    background: #4a90e2;
-    color: white;
-    cursor: pointer;
-    transition: background 0.3s;
-}
+  }
 
-button:hover {
-    background: #357ab7;
-}
-
-/* Command / result / history boxes */
-#command, #result, #history {
-    background: #f0f2f5;
-    padding: 0.6rem;
-    border-radius: 6px;
-    word-break: break-word;
-}
-
-/* History panel with scroll if content overflows */
-#history {
-    max-height: 300px;
-    overflow-y: auto;
-    white-space: pre-wrap;
+  .seed-option {
+    grid-template-columns: 24px 1fr minmax(40px, 1fr);
+  }
 }
