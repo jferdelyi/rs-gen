@@ -1,5 +1,5 @@
-const BASE_URL = "http://127.0.0.1:5000";
-//const BASE_URL = "https://zetasoft.fr/generator/api";
+const BASE_URL = "https://zetasoft.fr/generator/api";
+//const BASE_URL = "http://127.0.0.1:5000";
 const SETTINGS_KEY = "markov_generator_v2.0";
 
 let isInitializing = true;
