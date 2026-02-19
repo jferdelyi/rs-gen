@@ -3,9 +3,14 @@
 
 <head>
   <meta charset="UTF-8">
-  <title>Markov Generator 2.0</title>
+  <title>Markov Word Generator 2.0</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <meta name="description" content="A configurable word generator based on Markov chains.">
+  <meta name="theme-color" content="#161b22">
+
   <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 </head>
 
 <body>
@@ -16,17 +21,38 @@
       <!-- Terminal -->
       <div id="terminal" class="terminal"></div>
 
-      <!-- Generate Button -->
-      <button id="generate-btn" class="primary-btn">Generate</button>
+      <!-- Generate / Reset -->
+      <div class="generate-row">
+        <button id="generate-btn" class="primary-btn" title="Generate a new word">
+          Generate
+        </button>
+
+        <button id="reset-btn" class="icon-btn" title="Clear terminal output">
+          <img src="reload.svg" alt="Reset">
+        </button>
+      </div>
 
       <!-- Action Buttons -->
       <div class="action-buttons">
-        <button id="open-settings" class="action-btn">Settings</button>
-        <button id="copy-command" class="action-btn" disabled>Copy API URL</button>
-        <a href="https://github.com/jferdelyi/rs-gen" target="_blank">
-          <img src="github-icon.svg" alt="GitHub" style="width:32px; height:32px; margin-right:4px;">
+        <button id="open-settings" class="action-btn" title="Open configuration panel">
+          Settings
+        </button>
+
+        <button id="copy-command" class="action-btn"
+          title="Copy the API request triggered when clicking Generate"
+          disabled>
+          Copy API URL
+        </button>
+
+        <a href="https://github.com/jferdelyi/rs-gen"
+           target="_blank"
+           rel="noopener"
+           class="icon-btn"
+           title="View source code on GitHub">
+          <img src="github-icon.svg" alt="GitHub repository">
         </a>
       </div>
+
     </div>
   </div>
 
@@ -38,62 +64,93 @@
       <h3>General Settings</h3>
 
       <div class="input-group">
-        <label for="randomness" class="label-title">Randomness</label>
+        <label for="randomness" class="label-title">
+          Randomness
+        </label>
         <div class="slider-inline">
-          <input type="range" id="randomness" min="0" max="1" step="0.01" value="0.1">
+          <input type="range"
+                 id="randomness"
+                 min="0"
+                 max="1"
+                 step="0.01"
+                 value="0.1"
+                 title="Adjust the level of randomness applied during prediction">
           <span id="randomness-val" class="slider-value">0.10</span>
         </div>
       </div>
 
       <div class="input-group">
-        <label for="max_n" class="label-title">Max n-gram limit</label>
+        <label for="max_n" class="label-title">
+          Maximum n-gram order
+        </label>
         <div class="slider-inline">
-          <input type="range" id="max_n" min="0" max="100" step="1" value="0">
-          <span id="max_n-val" class="slider-value">no limit</span>
+          <input type="range"
+                 id="max_n"
+                 min="0"
+                 max="100"
+                 step="1"
+                 value="0"
+                 title="Limit the maximum n-gram order used for prediction">
+          <span id="max_n-val" class="slider-value">No limit</span>
         </div>
       </div>
 
       <div class="input-group">
-        <label for="nb_try" class="label-title">Number of tries</label>
+        <label for="nb_try" class="label-title">
+          Retry Attempts
+        </label>
         <div class="slider-inline">
-          <input type="range" id="nb_try" min="1" max="100" step="1" value="1">
+          <input type="range"
+                 id="nb_try"
+                 min="1"
+                 max="100"
+                 step="1"
+                 value="1"
+                 title="Number of retries if the generated word already exists in the training dataset">
           <span id="nb_try-val" class="slider-value">1</span>
         </div>
       </div>
 
-      <label>
-        <input type="checkbox" id="reduce_random"> Advance random
+      <label title="Add more randomness to predictions">
+        <input type="checkbox" id="reduce_random">
+        Advance randomness
       </label>
 
       <!-- Seed Options -->
       <div id="seed-options">
-        <h3>Seed</h3>
-        <label class="seed-option">
+        <h3>Seed Configuration</h3>
+
+        <label class="seed-option" title="Generate without an initial seed">
           <input type="radio" name="seed" value="none" checked>
-          <span>None</span>
+          <span>No seed</span>
         </label>
-        <label class="seed-option">
+
+        <label class="seed-option" title="Provide a custom starting sequence">
           <input type="radio" name="seed" value="custom">
-          <span>Custom</span>
+          <span>Custom seed</span>
           <input type="text" id="custom-seed" disabled>
         </label>
-        <label class="seed-option">
+
+        <label class="seed-option" title="Select a random seed from a specific n-gram order">
           <input type="radio" name="seed" value="random">
           <span>Random n-gram</span>
           <input type="number" id="random-seed" value="2" min="2" disabled>
         </label>
-        <label class="seed-option">
+
+        <label class="seed-option" title="Select a random seed from a randomly chosen n-gram order">
           <input type="radio" name="seed" value="full-random">
-          <span>Full Random</span>
+          <span>Fully random</span>
         </label>
       </div>
 
       <!-- Model Intensities -->
-      <h3>Model Intensities</h3>
+      <h3>Model Weights</h3>
       <div id="model-intensities">Loading models...</div>
 
       <!-- Close Modal -->
-      <button id="close-settings" class="primary-btn">Close</button>
+      <button id="close-settings" class="primary-btn">
+        Close
+      </button>
 
     </div>
   </div>

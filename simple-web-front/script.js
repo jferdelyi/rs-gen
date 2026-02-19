@@ -1,9 +1,10 @@
 const BASE_URL = "https://zetasoft.fr/generator/api";
-//const BASE_URL = "http://127.0.0.1:5000";
-const SETTINGS_KEY = "markov_generator_v2.0";
+// const BASE_URL = "http://127.0.0.1:5000";
+
+const SETTINGS_KEY = "markov_word_generator_v2.0";
 
 let isInitializing = true;
-let lastGeneratedUrl = null;
+let currentUrl = null;
 
 /* =============================
    DOM References
@@ -12,13 +13,14 @@ const terminal = document.getElementById("terminal");
 const generateBtn = document.getElementById("generate-btn");
 const copyBtn = document.getElementById("copy-command");
 const openSettingsBtn = document.getElementById("open-settings");
+const resetBtn = document.getElementById("reset-btn");
 const closeSettingsBtn = document.getElementById("close-settings");
 const settingsModal = document.getElementById("settings-modal");
 
 const randomness = document.getElementById("randomness");
-const max_n = document.getElementById("max_n");
-const nb_try = document.getElementById("nb_try");
-const reduceRandom = document.getElementById("reduce_random");
+const maxN = document.getElementById("max_n");
+const retryCount = document.getElementById("nb_try");
+const progressiveRandomness = document.getElementById("reduce_random");
 
 const seedRadios = document.querySelectorAll('input[name="seed"]');
 const customSeed = document.getElementById("custom-seed");
@@ -44,37 +46,41 @@ const defaultSettings = {
    URL Builder
 ============================= */
 function buildUrl() {
-    const seedValue = document.querySelector('input[name="seed"]:checked')?.value || "none";
-    let seedQuery = {
-        "custom": `custom:${encodeURIComponent(customSeed.value)}`,
-        "random": `random:${parseInt(randomSeed.value)}`,
-        "full-random": "random:0"
-    }[seedValue] || "none";
+    const selectedSeed = document.querySelector('input[name="seed"]:checked')?.value || "none";
 
-    const intensityQuery = Array.from(modelContainer.querySelectorAll("input[type=range]"))
+    const seedQuery = {
+        custom: `custom:${encodeURIComponent(customSeed.value)}`,
+        random: `random:${parseInt(randomSeed.value)}`,
+        "full-random": "random:0"
+    }[selectedSeed] || "none";
+
+    const intensityQuery = Array.from(
+        modelContainer.querySelectorAll("input[type=range]")
+    )
         .map(slider => `${encodeURIComponent(slider.dataset.model)}:${slider.value}`)
         .join(",");
 
-    return `${BASE_URL}/v1/generate?max_n=${max_n.value}&nb_try=${nb_try.value}&randomness=${randomness.value}&reduce_random=${reduceRandom.checked}&seed=${seedQuery}&intensity=${intensityQuery}`;
+    return `${BASE_URL}/v1/generate?max_n=${maxN.value}&nb_try=${retryCount.value}&randomness=${randomness.value}&reduce_random=${progressiveRandomness.checked}&seed=${seedQuery}&intensity=${intensityQuery}`;
 }
 
 function updateUrl() {
-    lastGeneratedUrl = buildUrl();
-    copyBtn.disabled = !lastGeneratedUrl;
+    currentUrl = buildUrl();
+    copyBtn.disabled = !currentUrl;
 }
 
 /* =============================
-   Settings Load/Save
+   Settings Load / Save
 ============================= */
 function loadSettings() {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || defaultSettings;
 
-    Object.assign(randomness, { value: saved.randomness });
-    Object.assign(max_n, { value: saved.max_n });
-    Object.assign(nb_try, { value: saved.nb_try });
-    reduceRandom.checked = saved.reduce_random;
+    randomness.value = saved.randomness;
+    maxN.value = saved.max_n;
+    retryCount.value = saved.nb_try;
+    progressiveRandomness.checked = saved.reduce_random;
 
     seedRadios.forEach(r => r.checked = r.value === saved.seed);
+
     customSeed.value = saved.custom_seed;
     randomSeed.value = saved.random_seed;
 
@@ -94,9 +100,9 @@ function saveSettings() {
 
     const settings = {
         randomness: randomness.value,
-        max_n: max_n.value,
-        nb_try: nb_try.value,
-        reduce_random: reduceRandom.checked,
+        max_n: maxN.value,
+        nb_try: retryCount.value,
+        reduce_random: progressiveRandomness.checked,
         seed: selectedSeed,
         custom_seed: customSeed.value,
         random_seed: randomSeed.value,
@@ -120,9 +126,19 @@ function bindSlider(slider, output, formatter = v => v) {
 }
 
 function bindSliders() {
-    bindSlider(randomness, document.getElementById("randomness-val"), v => `${parseInt(v * 100)}%`);
-    bindSlider(nb_try, document.getElementById("nb_try-val"));
-    bindSlider(max_n, document.getElementById("max_n-val"), v => v === 0 ? "no limit" : v === 1 ? 2 : v);
+    bindSlider(randomness,
+        document.getElementById("randomness-val"),
+        v => `${Math.round(v * 100)}%`
+    );
+
+    bindSlider(retryCount,
+        document.getElementById("nb_try-val")
+    );
+
+    bindSlider(maxN,
+        document.getElementById("max_n-val"),
+        v => v === 0 ? "No limit" : v
+    );
 }
 
 /* =============================
@@ -131,10 +147,15 @@ function bindSliders() {
 async function loadModels() {
     try {
         const response = await fetch(`${BASE_URL}/v1/models`);
-        const models = (await response.text()).trim().split("\n").filter(Boolean);
+        const models = (await response.text())
+            .trim()
+            .split("\n")
+            .filter(Boolean);
+
         const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || defaultSettings;
 
         modelContainer.innerHTML = "";
+
         models.forEach(model => {
             const wrapper = document.createElement("div");
             wrapper.className = "input-group";
@@ -148,9 +169,12 @@ async function loadModels() {
 
             const slider = document.createElement("input");
             slider.type = "range";
-            slider.min = 0; slider.max = 100; slider.step = 0.1;
+            slider.min = 0;
+            slider.max = 100;
+            slider.step = 0.1;
             slider.dataset.model = model;
             slider.value = saved.models?.[model] ?? 100;
+            slider.title = `Adjust the weight of model "${model}"`;
 
             const valueSpan = document.createElement("span");
             valueSpan.className = "slider-value";
@@ -165,53 +189,32 @@ async function loadModels() {
             wrapper.append(label, row);
             modelContainer.appendChild(wrapper);
         });
+
     } catch {
-        modelContainer.textContent = "Failed to load models";
+        modelContainer.textContent = "Unable to load models.";
     }
 }
 
 /* =============================
-   Terminal Typewriter
-============================= */
-function typeWriter(text) {
-    const line = document.createElement("div");
-    terminal.appendChild(line);
-    let i = 0;
-    const interval = setInterval(() => {
-        line.textContent += text[i++];
-        terminal.scrollTop = terminal.scrollHeight;
-        if (i >= text.length) clearInterval(interval);
-    }, 15);
-}
-
-/* =============================
-   Generate
-============================= */
-async function generate() {
-    generateBtn.disabled = true;
-    try {
-        const response = await fetch(lastGeneratedUrl);
-        typeWriter(await response.text());
-    } catch (err) {
-        typeWriter("Error: " + err.message);
-    }
-    generateBtn.disabled = false;
-}
-
-/* =============================
-   Terminal Init
+   Terminal
 ============================= */
 function initTerminal() {
     terminal.innerHTML = "";
 
     const loginLine = document.createElement("div");
     loginLine.className = "terminal-line terminal-muted";
-    loginLine.textContent = (() => {
-        const d = new Date();
-        const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        return `Last login: ${days[d.getDay()]} ${months[d.getMonth()]} ${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
-    })();
+
+    const d = new Date();
+    loginLine.textContent =
+        `Last login: ${d.toLocaleString("en-US", {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false
+        })}`;
 
     const promptLine = document.createElement("div");
     promptLine.className = "terminal-line";
@@ -225,40 +228,93 @@ function initTerminal() {
     path.textContent = " ~ $ ";
 
     const command = document.createElement("span");
-    command.className = "terminal-line";
-    command.textContent = ".\\rs-gen";
+    command.textContent = "./rs-gen";
 
     promptLine.append(user, path, command);
     terminal.append(loginLine, promptLine);
+}
+
+function typeWriter(text) {
+    const line = document.createElement("div");
+    terminal.appendChild(line);
+
+    let i = 0;
+    const interval = setInterval(() => {
+        line.textContent += text[i++];
+        terminal.scrollTop = terminal.scrollHeight;
+        if (i >= text.length) clearInterval(interval);
+    }, 15);
+}
+
+/* =============================
+   Generate
+============================= */
+async function generate() {
+    if (!currentUrl) return;
+
+    generateBtn.disabled = true;
+
+    try {
+        const response = await fetch(currentUrl);
+        const result = await response.text();
+        typeWriter(result);
+    } catch (err) {
+        typeWriter(`Error: ${err.message}`);
+    }
+
+    generateBtn.disabled = false;
 }
 
 /* =============================
    Event Listeners
 ============================= */
 generateBtn.addEventListener("click", generate);
-[randomness, max_n, nb_try, reduceRandom, customSeed, randomSeed].forEach(el => el.addEventListener("input", saveSettings));
 
-seedRadios.forEach(r => r.addEventListener("change", () => {
-    customSeed.disabled = r.value !== "custom";
-    randomSeed.disabled = r.value !== "random";
-    saveSettings();
-}));
+[randomness, maxN, retryCount, progressiveRandomness, customSeed, randomSeed]
+    .forEach(el => el.addEventListener("input", saveSettings));
 
-openSettingsBtn.addEventListener("click", () => settingsModal.classList.remove("hidden"));
-closeSettingsBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
-settingsModal.addEventListener("mousedown", (e) => {
+seedRadios.forEach(radio => {
+    radio.addEventListener("change", () => {
+        customSeed.disabled = radio.value !== "custom";
+        randomSeed.disabled = radio.value !== "random";
+        saveSettings();
+    });
+});
+
+openSettingsBtn.addEventListener("click",
+    () => settingsModal.classList.remove("hidden")
+);
+
+closeSettingsBtn.addEventListener("click",
+    () => settingsModal.classList.add("hidden")
+);
+
+resetBtn.addEventListener("click", initTerminal);
+
+settingsModal.addEventListener("mousedown", e => {
     if (!document.querySelector(".modal-content").contains(e.target)) {
         settingsModal.classList.add("hidden");
     }
 });
+
 copyBtn.addEventListener("click", async () => {
-    if (!lastGeneratedUrl) return;
+    if (!currentUrl) return;
+
     try {
-        await navigator.clipboard.writeText(lastGeneratedUrl);
-        copyBtn.textContent = "Copied!"; copyBtn.disabled = true;
-        setTimeout(() => { copyBtn.textContent = "Copy URL"; copyBtn.disabled = false; }, 1000);
+        await navigator.clipboard.writeText(currentUrl);
+        copyBtn.textContent = "Copied!";
+        copyBtn.disabled = true;
+
+        setTimeout(() => {
+            copyBtn.textContent = "Copy API URL";
+            copyBtn.disabled = false;
+        }, 1000);
+
     } catch {
-        copyBtn.textContent = "Error"; setTimeout(() => copyBtn.textContent = "Copy URL", 1000);
+        copyBtn.textContent = "Copy failed";
+        setTimeout(() => {
+            copyBtn.textContent = "Copy API URL";
+        }, 1000);
     }
 });
 

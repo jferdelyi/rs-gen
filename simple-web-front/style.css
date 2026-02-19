@@ -127,6 +127,43 @@ body {
   cursor: not-allowed;
 }
 
+.generate-row {
+  display: flex;
+  gap: 12px;
+}
+
+.generate-row .primary-btn {
+  flex: 1;
+}
+
+/* Icon button for reset / GitHub */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.05s ease;
+  padding: 0;
+}
+
+.icon-btn img {
+  width: 32px;
+  height: 32px;
+}
+
+.icon-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.icon-btn:active {
+  transform: scale(0.96);
+}
+
 /* =========================
    Form Elements
 ========================= */
