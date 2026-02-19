@@ -1,4 +1,6 @@
-# rs-gen
+<p align="center"><img src="https://github.com/user-attachments/assets/da533945-bd63-4a7f-855f-b9822000276b" width="192"></p>
+
+# <p align="center">rs-gen</p>
 
 **rs-gen** is a Rust-based N-gram word generation toolkit composed of a reusable core library, a REST API server, and a lightweight web interface.
 
