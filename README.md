@@ -1,4 +1,6 @@
-<p align="center"><img src="https://github.com/user-attachments/assets/49a16a04-03d4-49a4-8c7a-05e95861ecb1" width="192"></p>
+<p align="center"><img src="https://github.com/user-attachments/assets/3ba9b48f-bc0c-4cee-9a30-1ba3ccbabc00" width="192"></p>
+
+
 
 
 # <p align="center">rs-gen</p>
