@@ -7,7 +7,7 @@ use std::collections::HashMap;
 /// # Variants
 /// - `Random(usize)`: select a random starting prefix, using up to the given
 ///   n-gram size as a bound.
-/// - `Custom(&str)`: use the provided string as the initial prefix.
+/// - `Custom(String)`: use the provided string as the initial prefix.
 /// - `False`: do not use any explicit seed; generation starts without
 ///   a predefined prefix.
 #[derive(PartialEq)]

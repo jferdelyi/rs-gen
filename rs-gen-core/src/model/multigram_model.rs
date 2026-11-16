@@ -191,15 +191,12 @@ impl MultiGramModel {
 	/// Predicts the next character for a given prefix.
 	///
 	/// # Parameters
-	/// - `key`: the prefix string
-	/// - `max_n`: maximum n-gram order to consider
-	/// - `randomness`: randomness factor (0.0..1.0)
-	/// - `reduce_random`: whether to reduce n on fallback
+	/// - `key`: the prefix string; its last `n - 1` characters are looked up
+	/// - `n`: order of the n-gram model to use
 	///
 	/// # Returns
 	/// - `Ok(Some(char))` if a prediction is made
-	/// - `Ok(None)` if no prediction is possible
-	/// - `Err(String)` on invalid randomness calculation
+	/// - `Ok(None)` if no prediction is possible (no model of order `n`, key too short, unknown key)
 	pub fn predict(
 		&self,
 		key: &str,
