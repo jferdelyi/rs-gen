@@ -15,13 +15,14 @@
 
 ```
 rs-gen
+├── data              # Training files of the models (.dat)
 ├── rs-gen-core       # Core N-gram and MultiGram generation logic
 ├── rs-gen-server     # REST API server (actix-web)
 ├── rs-gen-exemple    # Minimal API usage examples
 └── simple-web-front  # Lightweight web-based UI
 ```
 
-Each crate has a single responsibility and can be used independently.
+Each crate has a single responsibility and can be used independently. Each directory has its own README describing its files: [data](data/README.md), [rs-gen-core](rs-gen-core/README.md), [rs-gen-server](rs-gen-server/README.md), [rs-gen-exemple](rs-gen-exemple/README.md), [simple-web-front](simple-web-front/README.md).
 
 ### Development
 
