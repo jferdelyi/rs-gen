@@ -91,7 +91,8 @@ impl MultiGramModel {
 		let cpus = num_cpus::get();
 		let factor = 8;
 		let chunks = cpus * factor;
-		let chunk_size = lines.len().div_ceil(chunks);
+		// At least 1: `chunks(0)` panics on an empty file
+		let chunk_size = lines.len().div_ceil(chunks).max(1);
 
 		let (tx, rx) = mpsc::channel();
 		for chunk in lines.chunks(chunk_size) {
@@ -398,6 +399,17 @@ mod tests {
 		assert_eq!(loaded.dump(), built.dump());
 		assert!(loaded.check_if_exists("saint-étienne"));
 		assert_eq!(loaded.predict("<èz", 4), Ok(Some('e')));
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn empty_text_file_gives_an_empty_model() {
+		let dir = test_dir("empty");
+		let dat = dir.join("empty.dat");
+		std::fs::write(&dat, "").unwrap();
+		let model = MultiGramModel::new(&dat).unwrap();
+		assert_eq!(model.size(), 0);
+		assert_eq!(model.predict("<a", 2), Ok(None));
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 
