@@ -12,7 +12,7 @@ pub(crate) const END_CHAR: char = '>';
 /// Header written at the start of the binary cache.
 /// Bump its version whenever the serialized layout changes: a cache with another
 /// header is rebuilt from the text file instead of being misread.
-const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-2\n";
+const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-3\n";
 
 /// Top-level n-gram model containing multiple n-gram sizes and metadata for sequence generation.
 ///
@@ -162,12 +162,13 @@ impl MultiGramModel {
 	///
 	/// # Behavior
 	/// - Prepends `START_CHAR` and appends `END_CHAR` if missing.
-	/// - Adds sentence to `self.sentences`.
+	/// - Adds the lowercase sentence to `self.sentences`.
 	/// - Updates all n-gram models, for n = 2 to len(sentence).
 	/// - Creates new `NGramModel`s if needed.
 	pub fn add_sentence(&mut self, sentence: &str) {
 		let mut s = sentence.to_string();
-		self.sentences.insert(sentence.to_owned());
+		// Stored lowercase so that `check_if_exists` is a single lookup
+		self.sentences.insert(sentence.to_lowercase());
 
 		if !s.starts_with(START_CHAR) {
 			s.insert(0, START_CHAR);
@@ -214,9 +215,9 @@ impl MultiGramModel {
 		Ok(next_char)
 	}
 
-	/// Checks if a word already exists in the model.
+	/// Checks if a word already exists in the model, ignoring case.
 	pub fn check_if_exists(&self, word: &str) -> bool {
-		self.sentences.iter().any(|value| value.to_lowercase() == word.to_lowercase())
+		self.sentences.contains(&word.to_lowercase())
 	}
 
 	/// Merges another `MultiGramModel` into this one.
@@ -307,6 +308,15 @@ mod tests {
 		assert!(model.check_if_exists("paris"));
 		assert!(model.check_if_exists("PARIS"));
 		assert!(!model.check_if_exists("lyon"));
+	}
+
+	#[test]
+	fn sentences_are_stored_lowercase() {
+		// check_if_exists runs for every model at each try: it must stay a single lookup
+		let mut model = MultiGramModel::default();
+		model.add_sentence("Saint-Étienne");
+		assert!(model.sentences.contains("saint-étienne"));
+		assert!(!model.sentences.contains("Saint-Étienne"));
 	}
 
 	#[test]
