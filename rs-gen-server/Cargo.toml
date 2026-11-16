@@ -8,3 +8,6 @@ rs-gen-core = { path = "../rs-gen-core" }
 serde = { version = "1.0.228", features = ["derive"] }
 actix-web = "4.12.1"
 actix-cors = "0.7"
+
+[lints]
+workspace = true

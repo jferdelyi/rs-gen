@@ -71,12 +71,11 @@ pub(crate) fn list_files<P: AsRef<Path>>(dir: P, extension: &str) -> io::Result<
 		let entry = entry?;
 		let path = entry.path();
 
-		if path.is_file() {
-			if path.extension() == Some(std::ffi::OsStr::new(extension)) {
-				if let Some(name) = path.file_name() {
-					files.push(name.to_string_lossy().to_string());
-				}
-			}
+		if path.is_file()
+			&& path.extension() == Some(std::ffi::OsStr::new(extension))
+			&& let Some(name) = path.file_name()
+		{
+			files.push(name.to_string_lossy().to_string());
 		}
 	}
 

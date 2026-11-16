@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 rs-gen-core = { path = "../rs-gen-core" }
+
+[lints]
+workspace = true

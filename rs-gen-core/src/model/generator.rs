@@ -86,7 +86,7 @@ impl Generator {
 	/// Creates a new `PredictionInput` with default intensity for all models.
 	///
 	/// Probabilities are automatically normalized.
-	pub fn make_prediction_input<'a>(&self) -> PredictionInput {
+	pub fn make_prediction_input(&self) -> PredictionInput {
 		let mut models_probability: HashMap<String, f32> = HashMap::new();
 		for model in self.models.values() {
 			models_probability.insert(model.get_name().to_owned(), 0.0);
@@ -154,7 +154,7 @@ impl Generator {
 		match &prediction_input.start_seed {
 			StartSeed::False => (),
 			StartSeed::Random(random) => {
-				let n = if *random <= 0 {
+				let n = if *random == 0 {
 					rand::rng().random_range(2..=model.size() + 1)
 				} else {
 					max(2, min(*random, model.size() + 1))
@@ -182,7 +182,7 @@ impl Generator {
 		let mut model_index = 0;
 		let mut n = Generator::compute_n(global_prefix.chars().count(), max_n, prediction_input.randomness())?;
 		loop {
-			match model.predict(&mut global_prefix, n)? {
+			match model.predict(&global_prefix, n)? {
 				Some(c) => {
 					global_prefix.push(c);
 					if c != '>' {
@@ -192,7 +192,7 @@ impl Generator {
 					}
 				},
 				None => {
-					model_index = model_index + 1;
+					model_index += 1;
 					if model_index >= models_size {
 						model_index = 0;
 						models = self.get_random_models(prediction_input);
@@ -203,7 +203,7 @@ impl Generator {
 						if prediction_input.reduce_random {
 							n = Generator::compute_randomness(prediction_input.randomness(), n - 1, n)?;
 						} else {
-							n = n - 1;
+							n -= 1;
 						}
 						continue;
 					} else {
@@ -259,7 +259,7 @@ impl Generator {
 	/// - Otherwise, returns `default`.
 	/// - Ensures the returned n-gram size is always at least 2.
 	fn compute_randomness(randomness: f32, max: usize, default: usize) -> Result<usize, String> {
-		if randomness < 0.0 || randomness > 1.0 {
+		if !(0.0..=1.0).contains(&randomness) {
 			Err(format!(
 				"randomness must be between 0.0 and 1.0, got {}",
 				randomness
@@ -297,7 +297,7 @@ impl Generator {
 					nb_try -= 1;
 				}
 			}
-			if !exists || nb_try <= 0 { break; }
+			if !exists || nb_try == 0 { break; }
 		}
 
 		Ok(word)

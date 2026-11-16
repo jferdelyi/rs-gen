@@ -1,10 +1,16 @@
 [workspace]
 members = ["rs-gen-core",
     "rs-gen-server",
-    "rs-gen-exemple",
-    "rs-gen-core"
+    "rs-gen-exemple"
 ]
 resolver = "3"
+
+# Any warning, from rustc or clippy, fails the build
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
 
 [profile.release]
 opt-level = 3            # Maximum optimization

@@ -54,7 +54,7 @@ pub struct PredictionInput {
 	models_probability: HashMap<String, f32>,
 }
 
-impl<'a> PredictionInput {
+impl PredictionInput {
 	/// Creates a new `PredictionInput` from a set of model intensities.
 	///
 	/// Normalizes the probabilities internally.
