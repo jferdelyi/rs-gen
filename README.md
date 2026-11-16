@@ -11,13 +11,13 @@
 
 ## 📦 Workspace structure
 
-`rs-gen` is organized as a Cargo workspace with three crates and a stati website:
+`rs-gen` is organized as a Cargo workspace with three crates and a static website:
 
 ```
 rs-gen
-├── rs-core           # Core N-gram and MultiGram generation logic
-├── rs-server         # REST API server (actix-web)
-├── rs-exemple        # Minimal API usage examples
+├── rs-gen-core       # Core N-gram and MultiGram generation logic
+├── rs-gen-server     # REST API server (actix-web)
+├── rs-gen-exemple    # Minimal API usage examples
 └── simple-web-front  # Lightweight web-based UI
 ```
 
@@ -25,9 +25,9 @@ Each crate has a single responsibility and can be used independently.
 
 ---
 
-## 🧠 rs-core
+## 🧠 rs-gen-core
 
-The `rs-core` crate contains **all generation logic**. It is fully deterministic given a seed and parameters, and has **no dependency on networking or UI code**.
+The `rs-gen-core` crate contains **all generation logic** and has **no dependency on networking or UI code**. Generation is random: it draws from the thread-local random generator, so two runs with the same parameters give different words.
 
 ### Overview
 
@@ -83,15 +83,15 @@ This may produce keys that do not exist verbatim in the learned data. To preserv
 
 ### Avoiding duplicates
 
-To prevent generating words already present in the training database, the generator supports a **maximum retry count** (`nb_try`). If all attempts fail, generation return the last word generated.
+To prevent generating words already present in the training database, the generator supports a **maximum retry count** (`nb_try`). If all attempts fail, generation returns the last word generated.
 
 ### Seeding
 
 Generation can be initialized using a seed:
 
 * `custom:<string>` — start from an explicit prefix
-* `random:<n>` — start from a random key of the selected N-gram model
-  * `n = 0` selects both the model and the key randomly
+* `random:<n>` — start from a random key of the N-gram model of order `n`
+  * `n = 0` picks the order randomly
 
 ### Generator API
 
@@ -103,13 +103,17 @@ The `Generator` is the high-level entry point. While raw N-gram and MultiGram mo
 * checks for word existence
 * applies seeding logic
 
-➡️ **Pure logic only**: no I/O, no networking, no UI dependencies.
+➡️ **No networking and no UI dependencies**: the only I/O is loading the models from a directory.
+
+### Binary cache
+
+Each `<name>.dat` model is learned once, then cached as `<name>.bin` next to it. The cache starts with a version header: a cache written by another version of the crate is rebuilt from its `.dat` file.
 
 ---
 
-## 🌐 rs-server
+## 🌐 rs-gen-server
 
-`rs-server` exposes the generator through a minimal REST API built with **actix-web**. It loads models at startup and provides a stable HTTP interface for external tools and UIs.
+`rs-gen-server` exposes the generator through a minimal REST API built with **actix-web**. It loads models at startup and provides a stable HTTP interface for external tools and UIs.
 
 ### API endpoints
 
@@ -135,7 +139,7 @@ http://127.0.0.1:5000/v1/generate?max_n=0&nb_try=100&randomness=0.1&reduce_rando
 | `nb_try`        | Maximum attempts to avoid generating a word already present in the database              |
 | `randomness`    | Randomness factor (`0.0` – `1.0`) controlling random N-gram selection                    |
 | `reduce_random` | Apply randomness again during key reduction (highly exploratory results)                 |
-| `seed`          | `custom:<string>` or `random:<n>` (model index, `0` = random)                            |
+| `seed`          | `custom:<string>` or `random:<n>` (N-gram order of the starting key, `0` = random)      |
 | `intensity`     | Model weights formatted as `<database>:<value>`; values are normalized before prediction |
 
 ---
