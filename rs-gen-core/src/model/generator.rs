@@ -200,11 +200,11 @@ impl Generator {
 							Some(model) => model,
 							None => return Err("No model available for prediction".to_owned())
 						};
-						if prediction_input.reduce_random {
-							n = Generator::compute_randomness(prediction_input.randomness(), n - 1, n)?;
-						} else {
-							n -= 1;
+						// Every model failed: a smaller n is needed, and 2 is the smallest one
+						if n <= 2 {
+							return Err("No model can continue the prefix".to_owned());
 						}
+						n = Generator::reduce_n(n, prediction_input);
 						continue;
 					} else {
 						model = match self.models.get_mut(&models[model_index]) {
@@ -226,6 +226,20 @@ impl Generator {
 		}
 
 		Ok(word)
+	}
+
+	/// Returns a smaller n after every model failed with `n` (requires `n > 2`).
+	///
+	/// - Without `reduce_random`, or with a zero randomness: `n - 1`.
+	/// - With `reduce_random`: a random value in `[2, n - 1]`.
+	///
+	/// The result is always lower than `n`: keeping `n` would fail again the same way.
+	fn reduce_n(n: usize, prediction_input: &PredictionInput) -> usize {
+		if prediction_input.reduce_random && prediction_input.randomness() > 0.0 {
+			rand::rng().random_range(2..=n - 1)
+		} else {
+			n - 1
+		}
 	}
 
 	/// Compute next n
@@ -318,5 +332,96 @@ impl Generator {
 			}
 		}
 		Ok(())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::path::PathBuf;
+	use std::sync::mpsc;
+	use std::time::Duration;
+
+	// Writes one `.dat` file per model in a directory dedicated to one test, then loads them
+	fn generator_with(test: &str, models: &[(&str, &str)]) -> (Generator, PathBuf) {
+		let dir = std::env::temp_dir().join(format!("rs-gen-generator-{}-{}", std::process::id(), test));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		for (name, lines) in models {
+			std::fs::write(dir.join(format!("{}.dat", name)), lines).unwrap();
+		}
+		(Generator::new(&dir).unwrap(), dir)
+	}
+
+	// Runs `count` predictions in another thread, so that a generation that never ends fails the test
+	fn predict_within_deadline(mut generator: Generator, input: PredictionInput, count: usize) -> Vec<Result<String, String>> {
+		let (tx, rx) = mpsc::channel();
+		std::thread::spawn(move || {
+			let words: Vec<Result<String, String>> = (0..count).map(|_| generator.predict(&input)).collect();
+			let _ = tx.send(words);
+		});
+		rx.recv_timeout(Duration::from_secs(10)).expect("the generation did not end within 10 seconds")
+	}
+
+	#[test]
+	fn predict_uses_only_models_with_a_weight() {
+		let (generator, dir) = generator_with("weights", &[("low", "abc\nbca\ncab\n"), ("up", "xyz\nyzx\nzxy\n")]);
+		let mut input = generator.make_prediction_input();
+		input.set_model_intensity("low", 1.0).unwrap();
+		input.set_model_intensity("up", 0.0).unwrap();
+		for word in predict_within_deadline(generator, input, 100) {
+			let word = word.unwrap();
+			assert!(word.chars().all(|c| "abc".contains(c)), "unexpected word {}", word);
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn predict_keeps_a_custom_seed() {
+		let (generator, dir) = generator_with("custom-seed", &[("low", "abc\nabd\n")]);
+		let mut input = generator.make_prediction_input();
+		input.start_seed = StartSeed::Custom("ab".to_owned());
+		for word in predict_within_deadline(generator, input, 20) {
+			let word = word.unwrap();
+			assert!(word == "abc" || word == "abd", "unexpected word {}", word);
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn predict_starts_from_a_random_seed_of_the_model() {
+		let (generator, dir) = generator_with("random-seed", &[("low", "abc\n")]);
+		let mut input = generator.make_prediction_input();
+		input.start_seed = StartSeed::Random(3);
+		for word in predict_within_deadline(generator, input, 20) {
+			let word = word.unwrap();
+			assert!(["abc", "bc", "c"].contains(&word.as_str()), "unexpected word {}", word);
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn predict_stops_when_the_seed_has_an_unknown_character() {
+		let (generator, dir) = generator_with("unknown-char", &[("low", "abc\n")]);
+		let mut input = generator.make_prediction_input();
+		input.start_seed = StartSeed::Custom("a€".to_owned());
+		for word in predict_within_deadline(generator, input, 3) {
+			assert!(word.is_err(), "no model knows '€', got {:?}", word);
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn reduce_random_without_randomness_still_reduces() {
+		// "<ba" exists in no model: the reduction must reach "a" even with a zero randomness
+		let (generator, dir) = generator_with("reduce-random", &[("low", "abc\n")]);
+		let mut input = generator.make_prediction_input();
+		input.start_seed = StartSeed::Custom("ba".to_owned());
+		input.reduce_random = true;
+		input.set_randomness(0.0).unwrap();
+		for word in predict_within_deadline(generator, input, 3) {
+			assert_eq!(word, Ok("babc".to_owned()));
+		}
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 }
