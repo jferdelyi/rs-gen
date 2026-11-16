@@ -93,11 +93,17 @@ impl NGramModel {
 	/// # Notes
 	/// - Converts the prefix to lowercase to match stored states.
 	pub fn predict(&self, prefix: &str) -> Option<char> {
-		let key: String = prefix
-			.chars()
-			.flat_map(|c| c.to_lowercase())
-			.collect();
-		self.states.get(key.as_str())?.predict()
+		// Generated prefixes are already lowercase: they are looked up without a copy
+		let state = if prefix.chars().all(|c| c.to_lowercase().eq(std::iter::once(c))) {
+			self.states.get(prefix)
+		} else {
+			let key: String = prefix
+				.chars()
+				.flat_map(|c| c.to_lowercase())
+				.collect();
+			self.states.get(key.as_str())
+		};
+		state?.predict()
 	}
 
 	/// Merges another n-gram model into this one.

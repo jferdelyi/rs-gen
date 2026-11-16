@@ -150,12 +150,16 @@ impl MultiGramModel {
 
 
 
-	/// Returns the last `n` characters of a string (UTF-8 safe).
-	fn last_n_chars(s: &str, n: usize) -> String {
-		if n > s.chars().count() {
-			return s.to_owned();
+	/// Returns the last `n` characters of a string (UTF-8 safe), without copying them.
+	fn last_n_chars(s: &str, n: usize) -> &str {
+		if n == 0 {
+			return "";
 		}
-		s.chars().rev().take(n).collect::<Vec<_>>().into_iter().rev().collect()
+		match s.char_indices().rev().nth(n - 1) {
+			Some((index, _)) => &s[index..],
+			// Fewer than `n` characters: the whole string
+			None => s,
+		}
 	}
 
 	/// Adds a sentence to the model.
@@ -200,14 +204,14 @@ impl MultiGramModel {
 		key: &str,
 		n: usize
 	) -> Result<Option<char>, String> {
-		let key_len = key.chars().count();
-		if key_len < n - 1 {
+		// No model below 2, and the key must hold at least n - 1 characters
+		if n < 2 || key.chars().count() < n - 1 {
 			return Ok(None);
 		}
 		let mut next_char = None;
 		if let Some(model) = self.ngrams.get(&n) {
 			let prefix = Self::last_n_chars(key, n - 1);
-			if let Some(c) = model.predict(&prefix) {
+			if let Some(c) = model.predict(prefix) {
 				next_char = Some(c);
 			}
 		}
@@ -331,6 +335,23 @@ mod tests {
 		assert_eq!(model.predict("<ab", 3), Ok(Some('c')));
 		assert_eq!(model.predict("<ab", 4), Ok(Some('c')));
 		assert_eq!(model.predict("b", 3), Ok(None));
+	}
+
+	#[test]
+	fn predict_without_a_model_of_that_order_returns_none() {
+		let mut model = MultiGramModel::default();
+		model.add_sentence("abc");
+		assert_eq!(model.predict("<ab", 0), Ok(None));
+		assert_eq!(model.predict("<ab", 1), Ok(None));
+		assert_eq!(model.predict("<ab", 9), Ok(None));
+	}
+
+	#[test]
+	fn last_n_chars_counts_characters_not_bytes() {
+		assert_eq!(MultiGramModel::last_n_chars("<été", 2), "té");
+		assert_eq!(MultiGramModel::last_n_chars("<été", 4), "<été");
+		assert_eq!(MultiGramModel::last_n_chars("<été", 9), "<été");
+		assert_eq!(MultiGramModel::last_n_chars("<été", 0), "");
 	}
 
 	#[test]
