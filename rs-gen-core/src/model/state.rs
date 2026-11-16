@@ -105,3 +105,72 @@ impl State {
 		Ok(())
 	}
 }
+
+#[cfg(test)]
+impl State {
+	/// Returns the transitions sorted by character, to compare states in tests.
+	pub(crate) fn sorted_transitions(&self) -> Vec<(char, usize)> {
+		let mut transitions: Vec<(char, usize)> = self.transitions
+			.iter()
+			.map(|(next_char, occurrence)| (*next_char, *occurrence))
+			.collect();
+		transitions.sort();
+		transitions
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	// Builds a state that observed each character of `observed` once
+	fn state_with(observed: &[char]) -> State {
+		let mut state = State::new("ab");
+		for next_char in observed {
+			state.add_transition(*next_char);
+		}
+		state
+	}
+
+	#[test]
+	fn add_transition_counts_each_occurrence() {
+		let state = state_with(&['a', 'b', 'a', 'a']);
+		assert_eq!(state.sorted_transitions(), vec![('a', 3), ('b', 1)]);
+	}
+
+	#[test]
+	fn predict_returns_none_without_transition() {
+		assert_eq!(state_with(&[]).predict(), None);
+	}
+
+	#[test]
+	fn predict_returns_the_only_transition() {
+		let state = state_with(&['x', 'x']);
+		for _ in 0..50 {
+			assert_eq!(state.predict(), Some('x'));
+		}
+	}
+
+	#[test]
+	fn predict_returns_only_observed_characters() {
+		let state = state_with(&['a', 'b', 'c']);
+		let mut seen = HashMap::new();
+		for _ in 0..300 {
+			let next_char = state.predict().expect("a state with transitions must predict");
+			*seen.entry(next_char).or_insert(0) += 1;
+		}
+		let mut keys: Vec<char> = seen.keys().copied().collect();
+		keys.sort();
+		assert_eq!(keys, vec!['a', 'b', 'c']);
+	}
+
+	#[test]
+	fn predict_follows_occurrence_weights() {
+		let mut observed = vec!['a'; 99];
+		observed.push('b');
+		let state = state_with(&observed);
+		let count_a = (0..1000).filter(|_| state.predict() == Some('a')).count();
+		// Expected around 990; 900 leaves a very wide margin against bad luck
+		assert!(count_a > 900, "'a' predicted {} times out of 1000", count_a);
+	}
+}

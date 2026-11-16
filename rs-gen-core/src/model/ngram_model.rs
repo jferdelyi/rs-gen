@@ -116,3 +116,106 @@ impl NGramModel {
 		Ok(())
 	}
 }
+
+#[cfg(test)]
+impl NGramModel {
+	/// Returns every state as (prefix, sorted transitions), sorted by prefix, to compare models in tests.
+	pub(crate) fn dump(&self) -> Vec<(String, Vec<(char, usize)>)> {
+		let mut states: Vec<(String, Vec<(char, usize)>)> = self.states
+			.iter()
+			.map(|(key, state)| (key.to_string(), state.sorted_transitions()))
+			.collect();
+		states.sort();
+		states
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	// Builds a model of order `n` from the given sentences
+	fn model_with(n: usize, sentences: &[&str]) -> NGramModel {
+		let mut model = NGramModel::new(n).unwrap();
+		for sentence in sentences {
+			model.add_sentence(sentence);
+		}
+		model
+	}
+
+	#[test]
+	fn new_rejects_order_below_two() {
+		assert!(NGramModel::new(1).is_err());
+		assert!(NGramModel::new(2).is_ok());
+	}
+
+	#[test]
+	fn add_sentence_records_lowercase_transitions() {
+		let model = model_with(3, &["<AbC>"]);
+		assert_eq!(model.dump(), vec![
+			("<a".to_owned(), vec![('b', 1)]),
+			("ab".to_owned(), vec![('c', 1)]),
+			("bc".to_owned(), vec![('>', 1)]),
+		]);
+	}
+
+	#[test]
+	fn add_sentence_ignores_sentences_shorter_than_order() {
+		let model = model_with(4, &["<a>"]);
+		assert!(model.dump().is_empty());
+	}
+
+	#[test]
+	fn add_sentence_accumulates_repeated_ngrams() {
+		let model = model_with(2, &["<aa>", "<ab>"]);
+		assert_eq!(model.dump(), vec![
+			("<".to_owned(), vec![('a', 2)]),
+			("a".to_owned(), vec![('>', 1), ('a', 1), ('b', 1)]),
+			("b".to_owned(), vec![('>', 1)]),
+		]);
+	}
+
+	#[test]
+	fn add_sentence_handles_accented_characters() {
+		let model = model_with(3, &["<Été>"]);
+		assert_eq!(model.dump(), vec![
+			("<é".to_owned(), vec![('t', 1)]),
+			("té".to_owned(), vec![('>', 1)]),
+			("ét".to_owned(), vec![('é', 1)]),
+		]);
+		assert_eq!(model.predict("ÉT"), Some('é'));
+	}
+
+	#[test]
+	fn predict_ignores_prefix_case() {
+		let model = model_with(3, &["<abc>"]);
+		assert_eq!(model.predict("AB"), Some('c'));
+		assert_eq!(model.predict("zz"), None);
+	}
+
+	#[test]
+	fn get_random_seed_returns_a_known_prefix() {
+		assert_eq!(NGramModel::new(3).unwrap().get_random_seed(), None);
+		let model = model_with(3, &["<abc>"]);
+		let seed = model.get_random_seed().expect("a model with states must give a seed");
+		assert!(["<a", "ab", "bc"].contains(&seed.as_str()), "unexpected seed {}", seed);
+	}
+
+	#[test]
+	fn merge_sums_counts_and_keeps_new_states() {
+		let mut model = model_with(2, &["<ab>"]);
+		model.merge(&model_with(2, &["<ab>", "<c>"])).unwrap();
+		assert_eq!(model.dump(), vec![
+			("<".to_owned(), vec![('a', 2), ('c', 1)]),
+			("a".to_owned(), vec![('b', 2)]),
+			("b".to_owned(), vec![('>', 2)]),
+			("c".to_owned(), vec![('>', 1)]),
+		]);
+	}
+
+	#[test]
+	fn merge_rejects_different_orders() {
+		let mut model = NGramModel::new(2).unwrap();
+		assert!(model.merge(&NGramModel::new(3).unwrap()).is_err());
+	}
+}

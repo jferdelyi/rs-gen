@@ -224,3 +224,124 @@ impl MultiGramModel {
 		Ok(())
 	}
 }
+
+#[cfg(test)]
+impl MultiGramModel {
+	/// Returns every state as (n, prefix, sorted transitions), sorted, to compare models in tests.
+	pub(crate) fn dump(&self) -> Vec<(usize, String, Vec<(char, usize)>)> {
+		let mut states: Vec<(usize, String, Vec<(char, usize)>)> = Vec::new();
+		for (n, model) in &self.ngrams {
+			for (prefix, transitions) in model.dump() {
+				states.push((*n, prefix, transitions));
+			}
+		}
+		states.sort();
+		states
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::path::PathBuf;
+
+	// Expected states of the word "ab", once wrapped as "<ab>"
+	fn states_of_ab() -> Vec<(usize, String, Vec<(char, usize)>)> {
+		vec![
+			(2, "<".to_owned(), vec![('a', 1)]),
+			(2, "a".to_owned(), vec![('b', 1)]),
+			(2, "b".to_owned(), vec![('>', 1)]),
+			(3, "<a".to_owned(), vec![('b', 1)]),
+			(3, "ab".to_owned(), vec![('>', 1)]),
+			(4, "<ab".to_owned(), vec![('>', 1)]),
+		]
+	}
+
+	// Creates an empty directory dedicated to one test
+	fn test_dir(name: &str) -> PathBuf {
+		let dir = std::env::temp_dir().join(format!("rs-gen-core-{}-{}", std::process::id(), name));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		dir
+	}
+
+	#[test]
+	fn add_sentence_builds_every_order() {
+		let mut model = MultiGramModel::default();
+		model.add_sentence("ab");
+		assert_eq!(model.size(), 3);
+		assert_eq!(model.dump(), states_of_ab());
+	}
+
+	#[test]
+	fn add_sentence_keeps_existing_markers() {
+		let mut model = MultiGramModel::default();
+		model.add_sentence("<ab>");
+		assert_eq!(model.dump(), states_of_ab());
+	}
+
+	#[test]
+	fn check_if_exists_ignores_case() {
+		let mut model = MultiGramModel::default();
+		model.add_sentence("Paris");
+		assert!(model.check_if_exists("paris"));
+		assert!(model.check_if_exists("PARIS"));
+		assert!(!model.check_if_exists("lyon"));
+	}
+
+	#[test]
+	fn predict_uses_the_requested_order() {
+		let mut model = MultiGramModel::default();
+		model.add_sentence("abc");
+		assert_eq!(model.predict("<ab", 3), Ok(Some('c')));
+		assert_eq!(model.predict("<ab", 4), Ok(Some('c')));
+		assert_eq!(model.predict("b", 3), Ok(None));
+	}
+
+	#[test]
+	fn merge_combines_ngrams_and_sentences() {
+		let mut model = MultiGramModel::default();
+		model.add_sentence("ab");
+		let mut other = MultiGramModel::default();
+		other.add_sentence("ab");
+		other.add_sentence("cd");
+		model.merge(&other).unwrap();
+		assert!(model.check_if_exists("cd"));
+		let start: Vec<(usize, String, Vec<(char, usize)>)> = model.dump()
+			.into_iter()
+			.filter(|(n, prefix, _)| *n == 2 && prefix == "<")
+			.collect();
+		assert_eq!(start, vec![(2, "<".to_owned(), vec![('a', 2), ('c', 1)])]);
+	}
+
+	#[test]
+	fn binary_cache_gives_back_the_same_model() {
+		let dir = test_dir("cache-round-trip");
+		let dat = dir.join("words.dat");
+		std::fs::write(&dat, "abc\nabd\nAbe\n").unwrap();
+
+		let built = MultiGramModel::new(&dat).unwrap();
+		assert!(dir.join("words.bin").exists());
+		let loaded = MultiGramModel::new(&dat).unwrap();
+
+		assert_eq!(loaded.get_name(), "words");
+		assert_eq!(loaded.dump(), built.dump());
+		assert!(loaded.check_if_exists("abe"));
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn accented_words_survive_the_binary_cache() {
+		let dir = test_dir("accents");
+		let dat = dir.join("villes.dat");
+		std::fs::write(&dat, "Saint-Étienne\nÈze\nÉpinal\n").unwrap();
+
+		let built = MultiGramModel::new(&dat).unwrap();
+		let loaded = MultiGramModel::new(&dat).unwrap();
+
+		assert_eq!(loaded.dump(), built.dump());
+		assert!(loaded.check_if_exists("saint-étienne"));
+		assert_eq!(loaded.predict("<èz", 4), Ok(Some('e')));
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+}
