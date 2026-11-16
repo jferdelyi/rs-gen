@@ -217,7 +217,12 @@ impl MultiGramModel {
 
 	/// Checks if a word already exists in the model, ignoring case.
 	pub fn check_if_exists(&self, word: &str) -> bool {
-		self.sentences.contains(&word.to_lowercase())
+		self.contains_lowercase(&word.to_lowercase())
+	}
+
+	/// Checks if an already lowercase word exists in the model.
+	pub(crate) fn contains_lowercase(&self, lowercase_word: &str) -> bool {
+		self.sentences.contains(lowercase_word)
 	}
 
 	/// Merges another `MultiGramModel` into this one.

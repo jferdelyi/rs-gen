@@ -102,29 +102,44 @@ impl Generator {
 		&self,
 		prediction_input: &PredictionInput,
 	) -> Vec<String> {
-		let mut rng = rand::rng();
+		let models = self.weighted_models(prediction_input);
+		let mut order = Vec::with_capacity(models.len());
+		Generator::shuffle_models(&models, &mut order);
+		order.into_iter().map(|(_, model)| model.get_name().to_owned()).collect()
+	}
 
-		let mut scored: Vec<(String, f64)> = prediction_input
+	/// Returns the models with a positive weight, with their weight.
+	///
+	/// Computed once per generation, so that the loop over the characters
+	/// never looks a model up by its name.
+	fn weighted_models(&self, prediction_input: &PredictionInput) -> Vec<(&MultiGramModel, f64)> {
+		prediction_input
 			.models_probability()
-			.filter_map(|(name, weight): (&str, f32)| {
-				if weight > 0.0 && self.models.contains_key(name) {
-					let u: f64 = rng.random();
-					let key = u.powf(1.0 / weight as f64);
-					Some((name.to_string(), key))
-				} else {
-					None
-				}
-			})
-			.collect();
+			.filter(|(_, weight)| *weight > 0.0)
+			.filter_map(|(name, weight)| self.models.get(name).map(|model| (model, f64::from(weight))))
+			.collect()
+	}
 
-		scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-
-		scored.into_iter().map(|(name, _)| name).collect()
+	/// Orders `models` randomly into `order`, a model with a higher weight coming first more often.
+	///
+	/// Weighted sampling without replacement (Efraimidis-Spirakis): each model draws `u` in
+	/// `[0, 1)` and the models are sorted by `u^(1 / weight)`, highest first.
+	/// `order` is reused between calls to avoid an allocation per character.
+	fn shuffle_models<'a>(models: &[(&'a MultiGramModel, f64)], order: &mut Vec<(f64, &'a MultiGramModel)>) {
+		let mut rng = rand::rng();
+		order.clear();
+		for (model, weight) in models {
+			let u: f64 = rng.random();
+			// ln(u) / weight sorts exactly like u^(1 / weight), without computing the power
+			order.push((u.ln() / weight, *model));
+		}
+		order.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
 	}
 
 	/// Internal sequence generation logic using a single model selection.
 	///
 	/// # Parameters
+	/// - `models`: Models with a positive weight, from `weighted_models`.
 	/// - `prediction_input`: Controls randomness, start seed, and max_n.
 	///
 	/// # Returns
@@ -135,9 +150,9 @@ impl Generator {
 	/// - Handles `StartSeed::False`, `StartSeed::Random`, `StartSeed::Custom`.
 	/// - Iterates over characters safely (UTF-8 aware).
 	/// - Loops until no next character is returned.
-	fn internal_predict(&mut self, prediction_input: &PredictionInput) -> Result<String, String> {
-		if self.models.is_empty() {
-			return Err("No models available for prediction".to_owned());
+	fn internal_predict(&self, models: &[(&MultiGramModel, f64)], prediction_input: &PredictionInput) -> Result<String, String> {
+		if models.is_empty() {
+			return Err("No model available for prediction".to_owned());
 		}
 
 		let max_n: usize = if prediction_input.max_n < 2 { 0 } else { prediction_input.max_n };
@@ -145,11 +160,9 @@ impl Generator {
 		let mut word = String::new();
 		let mut global_prefix = String::new();
 
-		let mut models = self.get_random_models(prediction_input);
-		let mut model = match self.models.get_mut(&models[0]) {
-			Some(model) => model,
-			None => return Err("No model available for prediction".to_owned())
-		};
+		let mut order = Vec::with_capacity(models.len());
+		Generator::shuffle_models(models, &mut order);
+		let mut model = order[0].1;
 
 		match &prediction_input.start_seed {
 			StartSeed::False => (),
@@ -178,7 +191,6 @@ impl Generator {
 			global_prefix.insert(0, START_CHAR);
 		}
 
-		let models_size = models.len();
 		let mut model_index = 0;
 		let mut n = Generator::compute_n(global_prefix.chars().count(), max_n, prediction_input.randomness())?;
 		loop {
@@ -193,13 +205,10 @@ impl Generator {
 				},
 				None => {
 					model_index += 1;
-					if model_index >= models_size {
+					if model_index >= order.len() {
 						model_index = 0;
-						models = self.get_random_models(prediction_input);
-						model = match self.models.get_mut(&models[model_index]) {
-							Some(model) => model,
-							None => return Err("No model available for prediction".to_owned())
-						};
+						Generator::shuffle_models(models, &mut order);
+						model = order[model_index].1;
 						// Every model failed: a smaller n is needed, and 2 is the smallest one
 						if n <= 2 {
 							return Err("No model can continue the prefix".to_owned());
@@ -207,10 +216,7 @@ impl Generator {
 						n = Generator::reduce_n(n, prediction_input);
 						continue;
 					} else {
-						model = match self.models.get_mut(&models[model_index]) {
-							Some(model) => model,
-							None => return Err("No model available for prediction".to_owned())
-						};
+						model = order[model_index].1;
 						continue;
 					}
 				}
@@ -218,11 +224,8 @@ impl Generator {
 
 			n = Generator::compute_n(global_prefix.chars().count(), max_n, prediction_input.randomness())?;
 			model_index = 0;
-			models = self.get_random_models(prediction_input);
-			model = match self.models.get_mut(&models[model_index]) {
-				Some(model) => model,
-				None => return Err("No model available for prediction".to_owned())
-			};
+			Generator::shuffle_models(models, &mut order);
+			model = order[model_index].1;
 		}
 
 		Ok(word)
@@ -294,20 +297,21 @@ impl Generator {
 	/// - Checks for duplicates against all loaded models up to `nb_try`.
 	/// - Returns the first non-duplicate or the last attempt if all fail.
 	pub fn predict(&mut self, prediction_input: &PredictionInput) -> Result<String, String> {
-		let mut word = self.internal_predict(prediction_input)?;
+		if self.models.is_empty() {
+			return Err("No models available for prediction".to_owned());
+		}
+		let models = self.weighted_models(prediction_input);
+		let mut word = self.internal_predict(&models, prediction_input)?;
 		let mut nb_try = prediction_input.nb_try;
 
 		loop {
 			let mut exists = false;
 			if nb_try > 0 {
-				for model in self.models.values() {
-					if model.check_if_exists(&word) {
-						exists = true;
-						break;
-					}
-				}
+				// Lowercased once for all the models
+				let lowercase_word = word.to_lowercase();
+				exists = self.models.values().any(|model| model.contains_lowercase(&lowercase_word));
 				if exists {
-					word = self.internal_predict(prediction_input)?;
+					word = self.internal_predict(&models, prediction_input)?;
 					nb_try -= 1;
 				}
 			}
