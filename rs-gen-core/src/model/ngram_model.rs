@@ -24,8 +24,10 @@ pub struct NGramModel {
 	/// The order of the model (number of characters in the n-gram)
 	n: usize, // must be >= 2
 
-	/// Mapping from a prefix (length n-1) to its corresponding state
-	states: HashMap<String, State>,
+	/// Mapping from a prefix (length n-1) to its corresponding state.
+	/// `Box<str>` holds the same UTF-8 text as a `String` (accents included),
+	/// without its spare capacity.
+	states: HashMap<Box<str>, State>,
 }
 
 impl NGramModel {
@@ -45,7 +47,7 @@ impl NGramModel {
 	/// Useful for starting a generation sequence.
 	/// Returns `None` if the model has no states.
 	pub fn get_random_seed(&self) -> Option<String> {
-		self.states.keys().choose(&mut rand::rng()).cloned()
+		self.states.keys().choose(&mut rand::rng()).map(|key| key.to_string())
 	}
 
 	/// Adds a sentence, word, or short phrase to the model.
@@ -73,8 +75,14 @@ impl NGramModel {
 			let next_char = chars[i + self.n - 1].to_lowercase().next().unwrap();
 
 			// Get or create the state for this prefix
-			let state = self.states.entry(prefix.clone()).or_insert_with(|| State::new(&prefix));
-			state.add_transition(next_char);
+			match self.states.get_mut(prefix.as_str()) {
+				Some(state) => state.add_transition(next_char),
+				None => {
+					let mut state = State::new();
+					state.add_transition(next_char);
+					self.states.insert(prefix.into_boxed_str(), state);
+				}
+			}
 		}
 	}
 
@@ -89,7 +97,7 @@ impl NGramModel {
 			.chars()
 			.flat_map(|c| c.to_lowercase())
 			.collect();
-		self.states.get(&key)?.predict()
+		self.states.get(key.as_str())?.predict()
 	}
 
 	/// Merges another n-gram model into this one.
@@ -107,13 +115,21 @@ impl NGramModel {
 
 		for (key, state) in &other.states {
 			if let Some(existing) = self.states.get_mut(key) {
-				existing.merge(state)?;
+				existing.merge(state);
 			} else {
 				self.states.insert(key.clone(), state.clone());
 			}
 		}
 
 		Ok(())
+	}
+
+	/// Releases the unused capacity of the states and of their transitions once learning is over.
+	pub(crate) fn shrink_to_fit(&mut self) {
+		self.states.shrink_to_fit();
+		for state in self.states.values_mut() {
+			state.shrink_to_fit();
+		}
 	}
 }
 
@@ -217,5 +233,14 @@ mod tests {
 	fn merge_rejects_different_orders() {
 		let mut model = NGramModel::new(2).unwrap();
 		assert!(model.merge(&NGramModel::new(3).unwrap()).is_err());
+	}
+
+	#[test]
+	fn state_entry_stays_small() {
+		// Each entry is a prefix and its state, stored millions of times
+		let model = model_with(2, &["<a>"]);
+		let (key, state) = model.states.iter().next().unwrap();
+		let size = std::mem::size_of_val(key) + std::mem::size_of_val(state);
+		assert!(size <= 40, "a state entry takes {} bytes", size);
 	}
 }
