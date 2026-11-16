@@ -9,6 +9,11 @@ use std::thread;
 pub(crate) const START_CHAR: char = '<';
 pub(crate) const END_CHAR: char = '>';
 
+/// Header written at the start of the binary cache.
+/// Bump its version whenever the serialized layout changes: a cache with another
+/// header is rebuilt from the text file instead of being misread.
+const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-2\n";
+
 /// Top-level n-gram model containing multiple n-gram sizes and metadata for sequence generation.
 ///
 /// # Responsibilities
@@ -55,15 +60,19 @@ impl MultiGramModel {
 	///
 	/// # Notes
 	/// - Uses a binary cache (`postcard`) for faster loading if available.
+	/// - A cache without the current `CACHE_HEADER` is rebuilt from the text file.
 	pub fn new<P: AsRef<Path>>(filepath: P) -> Result<Self, Box<dyn std::error::Error>> {
 		let binary_data_path = build_output_path(&filepath, "bin")?;
-		let mut model;
-		if binary_data_path.exists() {
-			let bytes = std::fs::read(binary_data_path)?;
-			model = postcard::from_bytes(&bytes)?;
+		let cache = if binary_data_path.exists() {
+			Some(std::fs::read(&binary_data_path)?)
 		} else {
-			model = Self::read_database_file(&filepath, binary_data_path)?;
-		}
+			None
+		};
+		let mut model: Self = match cache.as_deref().and_then(|bytes| bytes.strip_prefix(CACHE_HEADER)) {
+			Some(payload) => postcard::from_bytes(payload)?,
+			// No cache, or a cache written with another layout
+			None => Self::read_database_file(&filepath, binary_data_path)?,
+		};
 		model.name = get_filename(filepath)?;
 		Ok(model)
 	}
@@ -82,7 +91,7 @@ impl MultiGramModel {
 		let cpus = num_cpus::get();
 		let factor = 8;
 		let chunks = cpus * factor;
-		let chunk_size = (lines.len() + chunks - 1) / chunks;
+		let chunk_size = lines.len().div_ceil(chunks);
 
 		let (tx, rx) = mpsc::channel();
 		for chunk in lines.chunks(chunk_size) {
@@ -103,11 +112,21 @@ impl MultiGramModel {
 		for partial_model in rx.iter() {
 			final_model.merge(&partial_model)?;
 		}
+		final_model.shrink_to_fit();
 
-		let bytes = postcard::to_stdvec(&final_model)?;
+		let bytes = postcard::to_extend(&final_model, CACHE_HEADER.to_vec())?;
 		std::fs::write(binary_data_path, bytes)?;
 
 		Ok(final_model)
+	}
+
+	/// Releases the unused capacity of every n-gram model once learning is over.
+	fn shrink_to_fit(&mut self) {
+		self.ngrams.shrink_to_fit();
+		for model in self.ngrams.values_mut() {
+			model.shrink_to_fit();
+		}
+		self.sentences.shrink_to_fit();
 	}
 
 	/// Returns a random prefix (seed) from the n-gram model of order `n`.
@@ -185,14 +204,11 @@ impl MultiGramModel {
 			return Ok(None);
 		}
 		let mut next_char = None;
-		match self.ngrams.get(&n) {
-			Some(model) => {
-				let prefix = Self::last_n_chars(&key, n - 1);
-				if let Some(c) = model.predict(&prefix) {
-					next_char = Some(c);
-				}
-			},
-			None => {}
+		if let Some(model) = self.ngrams.get(&n) {
+			let prefix = Self::last_n_chars(key, n - 1);
+			if let Some(c) = model.predict(&prefix) {
+				next_char = Some(c);
+			}
 		}
 
 		Ok(next_char)
@@ -222,5 +238,148 @@ impl MultiGramModel {
 		}
 		self.sentences.extend(other.sentences.clone());
 		Ok(())
+	}
+}
+
+/// One state as (n, prefix, sorted transitions), to compare models in tests.
+#[cfg(test)]
+pub(crate) type StateDump = (usize, String, Vec<(char, usize)>);
+
+#[cfg(test)]
+impl MultiGramModel {
+	/// Returns every state, sorted, to compare models in tests.
+	pub(crate) fn dump(&self) -> Vec<StateDump> {
+		let mut states: Vec<StateDump> = Vec::new();
+		for (n, model) in &self.ngrams {
+			for (prefix, transitions) in model.dump() {
+				states.push((*n, prefix, transitions));
+			}
+		}
+		states.sort();
+		states
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::path::PathBuf;
+
+	// Expected states of the word "ab", once wrapped as "<ab>"
+	fn states_of_ab() -> Vec<StateDump> {
+		vec![
+			(2, "<".to_owned(), vec![('a', 1)]),
+			(2, "a".to_owned(), vec![('b', 1)]),
+			(2, "b".to_owned(), vec![('>', 1)]),
+			(3, "<a".to_owned(), vec![('b', 1)]),
+			(3, "ab".to_owned(), vec![('>', 1)]),
+			(4, "<ab".to_owned(), vec![('>', 1)]),
+		]
+	}
+
+	// Creates an empty directory dedicated to one test
+	fn test_dir(name: &str) -> PathBuf {
+		let dir = std::env::temp_dir().join(format!("rs-gen-core-{}-{}", std::process::id(), name));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		dir
+	}
+
+	#[test]
+	fn add_sentence_builds_every_order() {
+		let mut model = MultiGramModel::default();
+		model.add_sentence("ab");
+		assert_eq!(model.size(), 3);
+		assert_eq!(model.dump(), states_of_ab());
+	}
+
+	#[test]
+	fn add_sentence_keeps_existing_markers() {
+		let mut model = MultiGramModel::default();
+		model.add_sentence("<ab>");
+		assert_eq!(model.dump(), states_of_ab());
+	}
+
+	#[test]
+	fn check_if_exists_ignores_case() {
+		let mut model = MultiGramModel::default();
+		model.add_sentence("Paris");
+		assert!(model.check_if_exists("paris"));
+		assert!(model.check_if_exists("PARIS"));
+		assert!(!model.check_if_exists("lyon"));
+	}
+
+	#[test]
+	fn predict_uses_the_requested_order() {
+		let mut model = MultiGramModel::default();
+		model.add_sentence("abc");
+		assert_eq!(model.predict("<ab", 3), Ok(Some('c')));
+		assert_eq!(model.predict("<ab", 4), Ok(Some('c')));
+		assert_eq!(model.predict("b", 3), Ok(None));
+	}
+
+	#[test]
+	fn merge_combines_ngrams_and_sentences() {
+		let mut model = MultiGramModel::default();
+		model.add_sentence("ab");
+		let mut other = MultiGramModel::default();
+		other.add_sentence("ab");
+		other.add_sentence("cd");
+		model.merge(&other).unwrap();
+		assert!(model.check_if_exists("cd"));
+		let start: Vec<StateDump> = model.dump()
+			.into_iter()
+			.filter(|(n, prefix, _)| *n == 2 && prefix == "<")
+			.collect();
+		assert_eq!(start, vec![(2, "<".to_owned(), vec![('a', 2), ('c', 1)])]);
+	}
+
+	#[test]
+	fn binary_cache_gives_back_the_same_model() {
+		let dir = test_dir("cache-round-trip");
+		let dat = dir.join("words.dat");
+		std::fs::write(&dat, "abc\nabd\nAbe\n").unwrap();
+
+		let built = MultiGramModel::new(&dat).unwrap();
+		assert!(dir.join("words.bin").exists());
+		let loaded = MultiGramModel::new(&dat).unwrap();
+
+		assert_eq!(loaded.get_name(), "words");
+		assert_eq!(loaded.dump(), built.dump());
+		assert!(loaded.check_if_exists("abe"));
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn accented_words_survive_the_binary_cache() {
+		let dir = test_dir("accents");
+		let dat = dir.join("villes.dat");
+		std::fs::write(&dat, "Saint-Étienne\nÈze\nÉpinal\n").unwrap();
+
+		let built = MultiGramModel::new(&dat).unwrap();
+		let loaded = MultiGramModel::new(&dat).unwrap();
+
+		assert_eq!(loaded.dump(), built.dump());
+		assert!(loaded.check_if_exists("saint-étienne"));
+		assert_eq!(loaded.predict("<èz", 4), Ok(Some('e')));
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn cache_written_with_another_layout_is_rebuilt() {
+		let dir = test_dir("stale-cache");
+		let dat = dir.join("words.dat");
+		std::fs::write(&dat, "ab\n").unwrap();
+		// A cache without the current header, describing another word
+		let mut stale = MultiGramModel::default();
+		stale.add_sentence("zz");
+		let stale_bytes = postcard::to_stdvec(&stale).unwrap();
+		std::fs::write(dir.join("words.bin"), &stale_bytes).unwrap();
+
+		let model = MultiGramModel::new(&dat).unwrap();
+
+		assert_eq!(model.dump(), states_of_ab());
+		assert_ne!(std::fs::read(dir.join("words.bin")).unwrap(), stale_bytes);
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 }

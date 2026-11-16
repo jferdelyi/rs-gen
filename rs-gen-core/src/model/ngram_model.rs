@@ -24,8 +24,10 @@ pub struct NGramModel {
 	/// The order of the model (number of characters in the n-gram)
 	n: usize, // must be >= 2
 
-	/// Mapping from a prefix (length n-1) to its corresponding state
-	states: HashMap<String, State>,
+	/// Mapping from a prefix (length n-1) to its corresponding state.
+	/// `Box<str>` holds the same UTF-8 text as a `String` (accents included),
+	/// without its spare capacity.
+	states: HashMap<Box<str>, State>,
 }
 
 impl NGramModel {
@@ -45,7 +47,7 @@ impl NGramModel {
 	/// Useful for starting a generation sequence.
 	/// Returns `None` if the model has no states.
 	pub fn get_random_seed(&self) -> Option<String> {
-		self.states.keys().choose(&mut rand::rng()).cloned()
+		self.states.keys().choose(&mut rand::rng()).map(|key| key.to_string())
 	}
 
 	/// Adds a sentence, word, or short phrase to the model.
@@ -73,8 +75,14 @@ impl NGramModel {
 			let next_char = chars[i + self.n - 1].to_lowercase().next().unwrap();
 
 			// Get or create the state for this prefix
-			let state = self.states.entry(prefix.clone()).or_insert_with(|| State::new(&prefix));
-			state.add_transition(next_char);
+			match self.states.get_mut(prefix.as_str()) {
+				Some(state) => state.add_transition(next_char),
+				None => {
+					let mut state = State::new();
+					state.add_transition(next_char);
+					self.states.insert(prefix.into_boxed_str(), state);
+				}
+			}
 		}
 	}
 
@@ -89,7 +97,7 @@ impl NGramModel {
 			.chars()
 			.flat_map(|c| c.to_lowercase())
 			.collect();
-		self.states.get(&key)?.predict()
+		self.states.get(key.as_str())?.predict()
 	}
 
 	/// Merges another n-gram model into this one.
@@ -107,12 +115,132 @@ impl NGramModel {
 
 		for (key, state) in &other.states {
 			if let Some(existing) = self.states.get_mut(key) {
-				existing.merge(state)?;
+				existing.merge(state);
 			} else {
 				self.states.insert(key.clone(), state.clone());
 			}
 		}
 
 		Ok(())
+	}
+
+	/// Releases the unused capacity of the states and of their transitions once learning is over.
+	pub(crate) fn shrink_to_fit(&mut self) {
+		self.states.shrink_to_fit();
+		for state in self.states.values_mut() {
+			state.shrink_to_fit();
+		}
+	}
+}
+
+#[cfg(test)]
+impl NGramModel {
+	/// Returns every state as (prefix, sorted transitions), sorted by prefix, to compare models in tests.
+	pub(crate) fn dump(&self) -> Vec<(String, Vec<(char, usize)>)> {
+		let mut states: Vec<(String, Vec<(char, usize)>)> = self.states
+			.iter()
+			.map(|(key, state)| (key.to_string(), state.sorted_transitions()))
+			.collect();
+		states.sort();
+		states
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	// Builds a model of order `n` from the given sentences
+	fn model_with(n: usize, sentences: &[&str]) -> NGramModel {
+		let mut model = NGramModel::new(n).unwrap();
+		for sentence in sentences {
+			model.add_sentence(sentence);
+		}
+		model
+	}
+
+	#[test]
+	fn new_rejects_order_below_two() {
+		assert!(NGramModel::new(1).is_err());
+		assert!(NGramModel::new(2).is_ok());
+	}
+
+	#[test]
+	fn add_sentence_records_lowercase_transitions() {
+		let model = model_with(3, &["<AbC>"]);
+		assert_eq!(model.dump(), vec![
+			("<a".to_owned(), vec![('b', 1)]),
+			("ab".to_owned(), vec![('c', 1)]),
+			("bc".to_owned(), vec![('>', 1)]),
+		]);
+	}
+
+	#[test]
+	fn add_sentence_ignores_sentences_shorter_than_order() {
+		let model = model_with(4, &["<a>"]);
+		assert!(model.dump().is_empty());
+	}
+
+	#[test]
+	fn add_sentence_accumulates_repeated_ngrams() {
+		let model = model_with(2, &["<aa>", "<ab>"]);
+		assert_eq!(model.dump(), vec![
+			("<".to_owned(), vec![('a', 2)]),
+			("a".to_owned(), vec![('>', 1), ('a', 1), ('b', 1)]),
+			("b".to_owned(), vec![('>', 1)]),
+		]);
+	}
+
+	#[test]
+	fn add_sentence_handles_accented_characters() {
+		let model = model_with(3, &["<Été>"]);
+		assert_eq!(model.dump(), vec![
+			("<é".to_owned(), vec![('t', 1)]),
+			("té".to_owned(), vec![('>', 1)]),
+			("ét".to_owned(), vec![('é', 1)]),
+		]);
+		assert_eq!(model.predict("ÉT"), Some('é'));
+	}
+
+	#[test]
+	fn predict_ignores_prefix_case() {
+		let model = model_with(3, &["<abc>"]);
+		assert_eq!(model.predict("AB"), Some('c'));
+		assert_eq!(model.predict("zz"), None);
+	}
+
+	#[test]
+	fn get_random_seed_returns_a_known_prefix() {
+		assert_eq!(NGramModel::new(3).unwrap().get_random_seed(), None);
+		let model = model_with(3, &["<abc>"]);
+		let seed = model.get_random_seed().expect("a model with states must give a seed");
+		assert!(["<a", "ab", "bc"].contains(&seed.as_str()), "unexpected seed {}", seed);
+	}
+
+	#[test]
+	fn merge_sums_counts_and_keeps_new_states() {
+		let mut model = model_with(2, &["<ab>"]);
+		model.merge(&model_with(2, &["<ab>", "<c>"])).unwrap();
+		assert_eq!(model.dump(), vec![
+			("<".to_owned(), vec![('a', 2), ('c', 1)]),
+			("a".to_owned(), vec![('b', 2)]),
+			("b".to_owned(), vec![('>', 2)]),
+			("c".to_owned(), vec![('>', 1)]),
+		]);
+	}
+
+	#[test]
+	fn merge_rejects_different_orders() {
+		let mut model = NGramModel::new(2).unwrap();
+		assert!(model.merge(&NGramModel::new(3).unwrap()).is_err());
+	}
+
+	#[test]
+	fn state_entry_stays_small() {
+		// Each entry is a prefix and its state, stored millions of times
+		let model = model_with(2, &["<a>"]);
+		let (key, state) = model.states.iter().next().unwrap();
+		let size = std::mem::size_of_val(key) + std::mem::size_of_val(state);
+		assert!(size <= 40, "a state entry takes {} bytes", size);
 	}
 }
