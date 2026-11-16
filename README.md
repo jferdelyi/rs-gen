@@ -23,6 +23,15 @@ rs-gen
 
 Each crate has a single responsibility and can be used independently.
 
+### Development
+
+```
+cargo test
+cargo clippy --all-targets
+```
+
+Rustc and clippy warnings are errors in every crate. The [CI](.github/workflows/ci.yml) builds the workspace, runs clippy and the tests on Linux, macOS and Windows for every push to `main` and every pull request.
+
 ---
 
 ## 🧠 rs-gen-core
