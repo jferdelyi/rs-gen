@@ -17,6 +17,77 @@ pub struct Generator {
 	models: HashMap<String, MultiGramModel>
 }
 
+/// Draws the models one by one in a weighted random order, a model with a higher weight
+/// coming first more often (weighted sampling without replacement).
+///
+/// Each draw costs one random number, so a character predicted by the first model drawn
+/// does not pay for ordering every model.
+struct ModelDraw<'m, 'a> {
+	/// Models with a positive weight, and their weight.
+	models: &'m [(&'a MultiGramModel, f64)],
+
+	/// Models already drawn since the last restart.
+	drawn: Vec<bool>,
+
+	/// Sum of the weights of the models not drawn yet.
+	remaining_weight: f64,
+
+	/// Number of models not drawn yet.
+	remaining: usize,
+}
+
+impl<'m, 'a> ModelDraw<'m, 'a> {
+	/// Creates a draw over `models`, ready for its first model.
+	fn new(models: &'m [(&'a MultiGramModel, f64)]) -> Self {
+		let mut draw = Self {
+			models,
+			drawn: vec![false; models.len()],
+			remaining_weight: 0.0,
+			remaining: 0,
+		};
+		draw.reset();
+		draw
+	}
+
+	/// Puts every model back.
+	fn reset(&mut self) {
+		self.drawn.fill(false);
+		self.remaining_weight = self.models.iter().map(|(_, weight)| weight).sum();
+		self.remaining = self.models.len();
+	}
+
+	/// Puts every model back and draws the first one (requires at least one model).
+	fn restart(&mut self) -> &'a MultiGramModel {
+		self.reset();
+		self.next().expect("a draw restarts only over models")
+	}
+
+	/// Draws the next model, or `None` once every model was drawn.
+	fn next(&mut self) -> Option<&'a MultiGramModel> {
+		if self.remaining == 0 {
+			return None;
+		}
+		let mut r = rand::rng().random::<f64>() * self.remaining_weight;
+		let mut chosen = None;
+		for (index, (_, weight)) in self.models.iter().enumerate() {
+			if self.drawn[index] {
+				continue;
+			}
+			// The last model not drawn is kept in case rounding leaves `r` above every weight
+			chosen = Some(index);
+			if r < *weight {
+				break;
+			}
+			r -= weight;
+		}
+		let index = chosen?;
+		self.drawn[index] = true;
+		self.remaining_weight -= self.models[index].1;
+		self.remaining -= 1;
+		Some(self.models[index].0)
+	}
+}
+
 impl Generator {
 	/// Creates a generator by loading all `.dat` models from a directory.
 	///
@@ -103,9 +174,8 @@ impl Generator {
 		prediction_input: &PredictionInput,
 	) -> Vec<String> {
 		let models = self.weighted_models(prediction_input);
-		let mut order = Vec::with_capacity(models.len());
-		Generator::shuffle_models(&models, &mut order);
-		order.into_iter().map(|(_, model)| model.get_name().to_owned()).collect()
+		let mut draw = ModelDraw::new(&models);
+		std::iter::from_fn(|| draw.next()).map(|model| model.get_name().to_owned()).collect()
 	}
 
 	/// Returns the models with a positive weight, with their weight.
@@ -118,22 +188,6 @@ impl Generator {
 			.filter(|(_, weight)| *weight > 0.0)
 			.filter_map(|(name, weight)| self.models.get(name).map(|model| (model, f64::from(weight))))
 			.collect()
-	}
-
-	/// Orders `models` randomly into `order`, a model with a higher weight coming first more often.
-	///
-	/// Weighted sampling without replacement (Efraimidis-Spirakis): each model draws `u` in
-	/// `[0, 1)` and the models are sorted by `u^(1 / weight)`, highest first.
-	/// `order` is reused between calls to avoid an allocation per character.
-	fn shuffle_models<'a>(models: &[(&'a MultiGramModel, f64)], order: &mut Vec<(f64, &'a MultiGramModel)>) {
-		let mut rng = rand::rng();
-		order.clear();
-		for (model, weight) in models {
-			let u: f64 = rng.random();
-			// ln(u) / weight sorts exactly like u^(1 / weight), without computing the power
-			order.push((u.ln() / weight, *model));
-		}
-		order.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
 	}
 
 	/// Internal sequence generation logic using a single model selection.
@@ -160,9 +214,10 @@ impl Generator {
 		let mut word = String::new();
 		let mut global_prefix = String::new();
 
-		let mut order = Vec::with_capacity(models.len());
-		Generator::shuffle_models(models, &mut order);
-		let mut model = order[0].1;
+		let mut draw = ModelDraw::new(models);
+		let Some(mut model) = draw.next() else {
+			return Err("No model available for prediction".to_owned());
+		};
 
 		match &prediction_input.start_seed {
 			StartSeed::False => (),
@@ -191,7 +246,6 @@ impl Generator {
 			global_prefix.insert(0, START_CHAR);
 		}
 
-		let mut model_index = 0;
 		let mut n = Generator::compute_n(global_prefix.chars().count(), max_n, prediction_input.randomness())?;
 		loop {
 			match model.predict(&global_prefix, n)? {
@@ -204,28 +258,23 @@ impl Generator {
 					}
 				},
 				None => {
-					model_index += 1;
-					if model_index >= order.len() {
-						model_index = 0;
-						Generator::shuffle_models(models, &mut order);
-						model = order[model_index].1;
-						// Every model failed: a smaller n is needed, and 2 is the smallest one
-						if n <= 2 {
-							return Err("No model can continue the prefix".to_owned());
-						}
-						n = Generator::reduce_n(n, prediction_input);
-						continue;
-					} else {
-						model = order[model_index].1;
+					// Next model in the weighted random order
+					if let Some(next) = draw.next() {
+						model = next;
 						continue;
 					}
+					// Every model failed: a smaller n is needed, and 2 is the smallest one
+					if n <= 2 {
+						return Err("No model can continue the prefix".to_owned());
+					}
+					n = Generator::reduce_n(n, prediction_input);
+					model = draw.restart();
+					continue;
 				}
 			};
 
 			n = Generator::compute_n(global_prefix.chars().count(), max_n, prediction_input.randomness())?;
-			model_index = 0;
-			Generator::shuffle_models(models, &mut order);
-			model = order[model_index].1;
+			model = draw.restart();
 		}
 
 		Ok(word)
@@ -365,6 +414,31 @@ mod tests {
 			let _ = tx.send(words);
 		});
 		rx.recv_timeout(Duration::from_secs(10)).expect("the generation did not end within 10 seconds")
+	}
+
+	#[test]
+	fn model_draw_gives_every_model_once() {
+		let (a, b, c) = (MultiGramModel::default(), MultiGramModel::default(), MultiGramModel::default());
+		let models = [(&a, 0.5), (&b, 0.3), (&c, 0.2)];
+		let mut draw = ModelDraw::new(&models);
+		for _ in 0..100 {
+			let drawn: Vec<&MultiGramModel> = std::iter::from_fn(|| draw.next()).collect();
+			assert_eq!(drawn.len(), 3);
+			for model in [&a, &b, &c] {
+				assert_eq!(drawn.iter().filter(|other| std::ptr::eq(**other, model)).count(), 1);
+			}
+			draw.reset();
+		}
+	}
+
+	#[test]
+	fn model_draw_follows_the_weights() {
+		let (heavy, light) = (MultiGramModel::default(), MultiGramModel::default());
+		let models = [(&heavy, 0.75), (&light, 0.25)];
+		let mut draw = ModelDraw::new(&models);
+		let heavy_first = (0..4000).filter(|_| std::ptr::eq(draw.restart(), &heavy)).count();
+		// Expected 3000, with a standard deviation of about 27
+		assert!((2700..=3300).contains(&heavy_first), "heavy drawn first {} times out of 4000", heavy_first);
 	}
 
 	#[test]
