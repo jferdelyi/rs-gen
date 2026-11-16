@@ -19,3 +19,8 @@ pub mod model;
 ///
 /// Not exposed
 pub(crate) mod io;
+
+/// Fast hasher for the internal tables.
+///
+/// Not exposed
+pub(crate) mod hash;

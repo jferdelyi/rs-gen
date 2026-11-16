@@ -1,7 +1,7 @@
 use super::ngram_model::NGramModel;
+use crate::hash::{FastHashMap, FastHashSet};
 use crate::io::{build_output_path, get_filename, read_file};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
@@ -22,8 +22,8 @@ const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-3\n";
 /// - Maintain `name` of the model (from a file).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MultiGramModel {
-	ngrams: HashMap<usize, NGramModel>,
-	sentences: HashSet<String>,
+	ngrams: FastHashMap<usize, NGramModel>,
+	sentences: FastHashSet<String>,
 	name: String
 }
 
@@ -42,8 +42,8 @@ impl MultiGramModel {
 	/// - Not exposed
 	pub(crate) fn default() -> Self {
 		Self {
-			ngrams: HashMap::new(),
-			sentences: HashSet::new(),
+			ngrams: FastHashMap::default(),
+			sentences: FastHashSet::default(),
 			name: "".to_owned()
 		}
 	}

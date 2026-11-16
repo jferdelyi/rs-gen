@@ -1,7 +1,7 @@
 use super::state::State;
+use crate::hash::FastHashMap;
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Represents an n-gram model for sequences of characters.
 ///
@@ -27,7 +27,7 @@ pub struct NGramModel {
 	/// Mapping from a prefix (length n-1) to its corresponding state.
 	/// `Box<str>` holds the same UTF-8 text as a `String` (accents included),
 	/// without its spare capacity.
-	states: HashMap<Box<str>, State>,
+	states: FastHashMap<Box<str>, State>,
 }
 
 impl NGramModel {
@@ -39,7 +39,7 @@ impl NGramModel {
 		if n < 2 {
 			return Err("n must be >= 2".to_owned());
 		}
-		Ok(Self { n, states: HashMap::new() })
+		Ok(Self { n, states: FastHashMap::default() })
 	}
 
 	/// Returns a random prefix (seed) from the current model.
