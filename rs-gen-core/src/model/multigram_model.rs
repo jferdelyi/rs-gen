@@ -12,7 +12,7 @@ pub(crate) const END_CHAR: char = '>';
 /// Header written at the start of the binary cache.
 /// Bump its version whenever the serialized layout changes: a cache with another
 /// header is rebuilt from the text file instead of being misread.
-const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-3\n";
+const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-4\n";
 
 /// Top-level n-gram model containing multiple n-gram sizes and metadata for sequence generation.
 ///
@@ -23,7 +23,7 @@ const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-3\n";
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MultiGramModel {
 	ngrams: FastHashMap<usize, NGramModel>,
-	sentences: FastHashSet<String>,
+	sentences: FastHashSet<Box<str>>,
 	name: String
 }
 
@@ -173,7 +173,7 @@ impl MultiGramModel {
 	pub fn add_sentence(&mut self, sentence: &str) {
 		let mut s = sentence.to_string();
 		// Stored lowercase so that `check_if_exists` is a single lookup
-		self.sentences.insert(sentence.to_lowercase());
+		self.sentences.insert(sentence.to_lowercase().into_boxed_str());
 
 		if !s.starts_with(START_CHAR) {
 			s.insert(0, START_CHAR);

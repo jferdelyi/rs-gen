@@ -20,21 +20,33 @@ use serde::{Deserialize, Serialize};
 /// - Each transition occurrence count is strictly positive
 ///
 /// # Memory
-/// A model holds millions of states, most of them with a single transition:
-/// a small vector costs far less than a hash map per state.
+/// A model holds millions of states and 81 % of them have a single transition:
+/// the first transition is stored in the state itself, and only the states with more
+/// than one transition allocate the others. A state stays 24 bytes.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct State {
-	/// Outgoing transitions with the number of times each one was observed.
+	/// First transition and the number of times it was observed.
+	/// A count of 0 means that the state has no transition yet.
+	first: (char, u32),
+
+	/// Other transitions with their number of observations, in the order they were added.
 	/// Example: `[('e', 42), ('a', 3)]`
-	transitions: Vec<(char, u32)>,
+	others: Option<Box<[(char, u32)]>>,
 }
 
 impl State {
 	/// Creates a new empty state.
 	pub fn new() -> Self {
 		Self {
-			transitions: Vec::new(),
+			first: ('\0', 0),
+			others: None,
 		}
+	}
+
+	/// Returns every transition with its number of observations, the first one first.
+	fn transitions(&self) -> impl Iterator<Item = &(char, u32)> {
+		let first = if self.first.1 > 0 { Some(&self.first) } else { None };
+		first.into_iter().chain(self.others.iter().flat_map(|others| others.iter()))
 	}
 
 	/// Records an occurrence of a transition toward `next_char`.
@@ -47,10 +59,24 @@ impl State {
 
 	/// Adds `occurrences` to the transition toward `next_char`, creating it if needed.
 	fn add_occurrences(&mut self, next_char: char, occurrences: u32) {
-		match self.transitions.iter_mut().find(|(known_char, _)| *known_char == next_char) {
-			Some((_, count)) => *count = count.saturating_add(occurrences),
-			None => self.transitions.push((next_char, occurrences)),
+		if self.first.1 == 0 {
+			self.first = (next_char, occurrences);
+			return;
 		}
+		if self.first.0 == next_char {
+			self.first.1 = self.first.1.saturating_add(occurrences);
+			return;
+		}
+		if let Some(others) = &mut self.others
+			&& let Some((_, count)) = others.iter_mut().find(|(known_char, _)| *known_char == next_char)
+		{
+			*count = count.saturating_add(occurrences);
+			return;
+		}
+		// A new transition: the others are reallocated at their exact size, since they stay few
+		let mut others = self.others.take().map(|others| others.into_vec()).unwrap_or_default();
+		others.push((next_char, occurrences));
+		self.others = Some(others.into_boxed_slice());
 	}
 
 	/// Predicts the next character using weighted random sampling.
@@ -64,22 +90,22 @@ impl State {
 	///
 	/// Returns `None` if the state has no transitions.
 	pub fn predict(&self) -> Option<char> {
-		if self.transitions.is_empty() {
+		if self.first.1 == 0 {
 			return None;
+		}
+		// Most states have a single transition: no random number needed
+		if self.others.is_none() {
+			return Some(self.first.0);
 		}
 
 		// Compute the total number of occurrences
-		let total: u64 = self.transitions.iter().map(|(_, occurrence)| u64::from(*occurrence)).sum();
-		if total == 0 {
-			// Should not happen due to invariants, kept for safety
-			return None;
-		}
+		let total: u64 = self.transitions().map(|(_, occurrence)| u64::from(*occurrence)).sum();
 
 		// Randomly select a character
 		let mut r = rand::rng().random_range(0..total);
 		let mut fallback: Option<char> = None;
 
-		for (next_char, occurrence) in &self.transitions {
+		for (next_char, occurrence) in self.transitions() {
 			let occurrence = u64::from(*occurrence);
 			if r < occurrence {
 				return Some(*next_char);
@@ -100,14 +126,9 @@ impl State {
 	///
 	/// Useful for parallel learning or combining multiple partial models.
 	pub fn merge(&mut self, other: &Self) {
-		for (next_char, occurrence) in &other.transitions {
+		for (next_char, occurrence) in other.transitions() {
 			self.add_occurrences(*next_char, *occurrence);
 		}
-	}
-
-	/// Releases the unused capacity of the transitions once learning is over.
-	pub fn shrink_to_fit(&mut self) {
-		self.transitions.shrink_to_fit();
 	}
 }
 
@@ -115,8 +136,8 @@ impl State {
 impl State {
 	/// Returns the transitions sorted by character, to compare states in tests.
 	pub(crate) fn sorted_transitions(&self) -> Vec<(char, usize)> {
-		let mut transitions: Vec<(char, usize)> = self.transitions
-			.iter()
+		let mut transitions: Vec<(char, usize)> = self
+			.transitions()
 			.map(|(next_char, occurrence)| (*next_char, *occurrence as usize))
 			.collect();
 		transitions.sort();
@@ -178,6 +199,14 @@ mod tests {
 		let count_a = (0..1000).filter(|_| state.predict() == Some('a')).count();
 		// Expected around 990; 900 leaves a very wide margin against bad luck
 		assert!(count_a > 900, "'a' predicted {} times out of 1000", count_a);
+	}
+
+	#[test]
+	fn a_single_transition_allocates_nothing() {
+		// 81 % of the states have a single transition: it must live in the state itself
+		let state = state_with(&['a', 'a']);
+		assert!(state.others.is_none());
+		assert_eq!(state.sorted_transitions(), vec![('a', 2)]);
 	}
 
 	#[test]

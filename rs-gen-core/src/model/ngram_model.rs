@@ -130,12 +130,9 @@ impl NGramModel {
 		Ok(())
 	}
 
-	/// Releases the unused capacity of the states and of their transitions once learning is over.
+	/// Releases the unused capacity of the states once learning is over.
 	pub(crate) fn shrink_to_fit(&mut self) {
 		self.states.shrink_to_fit();
-		for state in self.states.values_mut() {
-			state.shrink_to_fit();
-		}
 	}
 }
 
