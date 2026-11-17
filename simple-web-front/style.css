@@ -164,6 +164,24 @@ body {
   transform: scale(0.96);
 }
 
+/* Link to the admin page: faded until hovered, narrow enough to keep
+   "Copy API URL" on one line on a 375 px phone */
+.admin-link {
+  width: 30px;
+}
+
+.admin-link img {
+  width: 26px;
+  height: 26px;
+  opacity: 0.45;
+  transition: opacity 0.15s ease;
+}
+
+.admin-link:hover img,
+.admin-link:focus-visible img {
+  opacity: 1;
+}
+
 /* =========================
    Form Elements
 ========================= */
