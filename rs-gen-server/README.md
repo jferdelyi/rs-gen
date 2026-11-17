@@ -55,14 +55,14 @@ Every admin request carries the header `X-Rs-Gen-Admin: 1`. Every route but `log
 | `POST /v1/admin/login` with `{"password": "..."}` | Opens a session, sent back as a cookie. | `200` |
 | `POST /v1/admin/logout` | Closes the session. | `200` |
 | `GET /v1/admin/session` | Tells that the session is open. | `200` |
-| `GET /v1/admin/models` | Every model with its status and size, the memory of the server, the limits. | `200` |
+| `GET /v1/admin/models` | Every model with its status and size, the memory of the server (available in RAM and with swap), the limits. | `200` |
 | `POST /v1/admin/models/check?name=<name>`, the text file as body | Checks the file without saving anything. | `200` with the report |
-| `POST /v1/admin/models?name=<name>`, the text file as body | Checks the file again, then builds the model in the background; it is shown once it generates words. | `202` with the report |
+| `POST /v1/admin/models?name=<name>[&force=true]`, the text file as body | Checks the file again, then builds the model in the background; it is shown once it generates words. `force=true` accepts a model that fits only by using swap. | `202` with the report |
 | `POST /v1/admin/models/<name>/hide` | Unloads the model and moves its files to `data/hidden/`. | `200` |
-| `POST /v1/admin/models/<name>/show` | Moves the files back and loads the model, if the memory allows it. | `200` |
+| `POST /v1/admin/models/<name>/show[?force=true]` | Moves the files back and loads the model, if the memory allows it; `force=true` accepts a model that fits only by using swap. | `200` |
 | `DELETE /v1/admin/models/<name>` with `{"confirm": "<name>"}` | Deletes the model and its files for good. | `200` |
 
-Without a session: `401`. Without the header: `403`. A failed check: `422` with the report. A name taken or another build running: `409`.
+Without a session: `401`. Without the header: `403`. A failed check: `422` with the report. A model that fits only by using swap, without `force=true`: `422` (with `"forceable": true` for `show`). A name taken or another build running: `409`.
 
 ### Model files
 
@@ -78,7 +78,12 @@ Without a session: `401`. Without the header: `403`. A failed check: `422` with 
 
 - Name: 1 to 64 lowercase letters, digits, `_` or `-`, starting with a letter or a digit, and not taken.
 - File: UTF-8, at most 32 MB, at least one word, lines of at most 256 characters (a line of L characters gives about L² / 2 states). Empty lines and lines with `<` or `>` are warnings.
-- Memory: the states of the future model are counted without building it, then turned into an estimate of its memory once loaded and while it is built. The build is refused when it would leave less than 64 MB free. The free memory is the lowest of `MemAvailable` and of what the systemd limit (`MemoryMax`) leaves; it is unknown outside Linux, where the memory is not checked.
+- Memory: the states of the future model are counted without building it, then turned into an estimate of its memory once loaded and while it is built, always keeping 64 MB free. Three cases:
+  - it fits in RAM: the model passes;
+  - it fits only by using swap: a risk (`risks` in the report), refused unless forced with `force=true`; the generation is then slower;
+  - it does not fit even with swap: a problem, refused even when forced, since the service would be killed for lack of memory, restarted, and killed again while loading the same model.
+
+  The memory in RAM is the lowest of `MemAvailable` and of what the systemd limit (`MemoryMax`) leaves. With swap, it adds `SwapFree` and what `MemorySwapMax` leaves. The count stops at the memory with swap. Outside Linux the memory is unknown and not checked.
 
 ### Security
 
@@ -99,7 +104,7 @@ Without a session: `401`. Without the header: `403`. A failed check: `422` with 
 cargo test -p rs-gen-server
 ```
 
-The tests call the routes through actix-web, on temporary data directories: each admin route without a session or without the header, login, wrong passwords and their limit, the life of a model (check, add, hide, show, delete), names made of paths.
+The tests call the routes through actix-web, on temporary data directories: each admin route without a session or without the header, login, wrong passwords and their limit, the life of a model (check, add, hide, show, delete), names made of paths, and with fixed memory figures the forced addition and display of a model that fits only by using swap, and the refusal of one that does not fit even with swap.
 
 ## Building for a Linux server
 

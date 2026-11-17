@@ -6,7 +6,8 @@
 //!
 //! `Generator::new` reads only the files directly in `data/`: the sub-directories are ignored.
 
-use crate::check::{MEMORY_MARGIN_BYTES, megabytes};
+use crate::check::{Fit, MEMORY_MARGIN_BYTES, fit, megabytes, megabytes_or_unknown};
+use crate::system::Room;
 use rs_gen_core::model::generator::Generator;
 use rs_gen_core::model::multigram_model::{ModelStats, MultiGramModel};
 use serde::Serialize;
@@ -27,8 +28,11 @@ pub(crate) enum AdminError {
 	/// The model is not in a state that allows the action.
 	Conflict(String),
 
-	/// The server does not have the memory for the action.
+	/// The server does not have the memory for the action, even with swap.
 	NotEnoughMemory(String),
+
+	/// The server has the memory for the action only by using swap: allowed when forced.
+	MemoryRisk(String),
 
 	/// Reading or writing a file failed.
 	Internal(String),
@@ -241,8 +245,9 @@ impl Catalog {
 	/// if the server has the memory for it.
 	///
 	/// # Parameters
-	/// - `available_bytes`: memory the server can still give, `None` if unknown.
-	pub(crate) fn show(&self, generator: &RwLock<Generator>, name: &str, available_bytes: Option<u64>) -> Result<(), AdminError> {
+	/// - `room`: memory the server can still give, in RAM and with swap.
+	/// - `force`: loads the model even if it fits only by using swap.
+	pub(crate) fn show(&self, generator: &RwLock<Generator>, name: &str, room: Room, force: bool) -> Result<(), AdminError> {
 		let _jobs = lock(&self.jobs);
 		let hidden = self.hidden_dir();
 		if !Self::dat(&hidden, name).exists() {
@@ -256,13 +261,25 @@ impl Catalog {
 			return Err(AdminError::Conflict(format!("A shown model is already named '{}'", name)));
 		}
 
-		if let Some(available) = available_bytes {
+		if room != Room::default() {
 			let needed = self.needed_to_load(&hidden, name)?;
-			if needed.saturating_add(MEMORY_MARGIN_BYTES) > available {
-				return Err(AdminError::NotEnoughMemory(format!(
-					"Not enough memory: loading '{}' needs about {}, the server has {} left (with a margin of {})",
-					name, megabytes(needed), megabytes(available), megabytes(MEMORY_MARGIN_BYTES)
-				)));
+			match fit(needed, room) {
+				Fit::InRam | Fit::Unknown => (),
+				Fit::WithSwap if force => (),
+				Fit::WithSwap => return Err(AdminError::MemoryRisk(format!(
+					"Not enough RAM: loading '{}' needs about {}, the server has {} of RAM left (with a margin of {}). It fits by using swap, {} left with it: the generation will be slower",
+					name, megabytes(needed), megabytes_or_unknown(room.ram_bytes), megabytes(MEMORY_MARGIN_BYTES), megabytes_or_unknown(room.with_swap_bytes)
+				))),
+				Fit::TooBig => return Err(AdminError::NotEnoughMemory(match room.with_swap_bytes {
+					Some(with_swap) => format!(
+						"Not enough memory, even with swap: loading '{}' needs about {}, the server has {} left with swap (with a margin of {})",
+						name, megabytes(needed), megabytes(with_swap), megabytes(MEMORY_MARGIN_BYTES)
+					),
+					None => format!(
+						"Not enough memory: loading '{}' needs about {}, the server has {} left (with a margin of {})",
+						name, megabytes(needed), megabytes_or_unknown(room.ram_bytes), megabytes(MEMORY_MARGIN_BYTES)
+					),
+				})),
 			}
 		}
 
@@ -477,6 +494,11 @@ mod tests {
 		Fixture { dir, generator: RwLock::new(generator), catalog }
 	}
 
+	// Memory known in RAM only, the swap unknown
+	fn ram(bytes: Option<u64>) -> Room {
+		Room { ram_bytes: bytes, with_swap_bytes: None }
+	}
+
 	impl Fixture {
 		fn status(&self, name: &str) -> Option<Status> {
 			self.catalog.list().unwrap().into_iter().find(|model| model.name == name).map(|model| model.status)
@@ -511,7 +533,7 @@ mod tests {
 		// Hidden models stay hidden after a restart: `Generator::new` ignores the sub-directories
 		assert!(Generator::new(&f.dir).unwrap().get_model_names().is_empty());
 
-		f.catalog.show(&f.generator, "fruits", None).unwrap();
+		f.catalog.show(&f.generator, "fruits", Room::default(), false).unwrap();
 		assert_eq!(f.status("fruits"), Some(Status::Shown));
 		assert!(f.loaded("fruits"));
 		assert!(f.dir.join("fruits.dat").exists() && !f.dir.join("hidden/fruits.dat").exists());
@@ -520,7 +542,7 @@ mod tests {
 	#[test]
 	fn hide_and_show_refuse_the_wrong_state() {
 		let f = fixture("wrong-state", &[("fruits", "pomme\n")]);
-		assert!(matches!(f.catalog.show(&f.generator, "fruits", None), Err(AdminError::Conflict(_))));
+		assert!(matches!(f.catalog.show(&f.generator, "fruits", Room::default(), false), Err(AdminError::Conflict(_))));
 		assert!(matches!(f.catalog.hide(&f.generator, "unknown"), Err(AdminError::NotFound(_))));
 		f.catalog.hide(&f.generator, "fruits").unwrap();
 		assert!(matches!(f.catalog.hide(&f.generator, "fruits"), Err(AdminError::Conflict(_))));
@@ -530,10 +552,33 @@ mod tests {
 	fn show_refuses_a_model_bigger_than_the_free_memory() {
 		let f = fixture("show-memory", &[("fruits", "pomme\npoire\n")]);
 		f.catalog.hide(&f.generator, "fruits").unwrap();
-		let result = f.catalog.show(&f.generator, "fruits", Some(MEMORY_MARGIN_BYTES));
+		let result = f.catalog.show(&f.generator, "fruits", ram(Some(MEMORY_MARGIN_BYTES)), false);
 		assert!(matches!(result, Err(AdminError::NotEnoughMemory(_))), "{:?}", result);
 		assert_eq!(f.status("fruits"), Some(Status::Hidden));
-		f.catalog.show(&f.generator, "fruits", Some(2 * MEMORY_MARGIN_BYTES)).unwrap();
+		f.catalog.show(&f.generator, "fruits", ram(Some(2 * MEMORY_MARGIN_BYTES)), false).unwrap();
+	}
+
+	#[test]
+	fn show_needs_force_for_a_model_that_fits_only_with_swap() {
+		let f = fixture("show-swap", &[("fruits", "pomme\npoire\n")]);
+		f.catalog.hide(&f.generator, "fruits").unwrap();
+		let room = Room { ram_bytes: Some(MEMORY_MARGIN_BYTES), with_swap_bytes: Some(2 * MEMORY_MARGIN_BYTES) };
+		let result = f.catalog.show(&f.generator, "fruits", room, false);
+		assert!(matches!(result, Err(AdminError::MemoryRisk(_))), "{:?}", result);
+		assert_eq!(f.status("fruits"), Some(Status::Hidden));
+		f.catalog.show(&f.generator, "fruits", room, true).unwrap();
+		assert_eq!(f.status("fruits"), Some(Status::Shown));
+		assert!(f.loaded("fruits"));
+	}
+
+	#[test]
+	fn force_does_not_show_a_model_bigger_than_the_memory_with_swap() {
+		let f = fixture("show-too-big", &[("fruits", "pomme\npoire\n")]);
+		f.catalog.hide(&f.generator, "fruits").unwrap();
+		let room = Room { ram_bytes: Some(MEMORY_MARGIN_BYTES), with_swap_bytes: Some(MEMORY_MARGIN_BYTES) };
+		let result = f.catalog.show(&f.generator, "fruits", room, true);
+		assert!(matches!(result, Err(AdminError::NotEnoughMemory(_))), "{:?}", result);
+		assert_eq!(f.status("fruits"), Some(Status::Hidden));
 	}
 
 	#[test]

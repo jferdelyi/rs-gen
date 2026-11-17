@@ -12,6 +12,7 @@ use actix_cors::Cors;
 
 use auth::Auth;
 use catalog::Catalog;
+use system::MemoryInfo;
 use rs_gen_core::model::generator::Generator;
 use rs_gen_core::model::prediction_input::StartSeed;
 use serde::Deserialize;
@@ -45,6 +46,8 @@ pub(crate) struct AppState {
 	pub(crate) catalog: Catalog,
 	/// Admin password and sessions, `None` when the admin routes are disabled
 	pub(crate) auth: Option<Auth>,
+	/// Reads the memory of the server: `MemoryInfo::read`, replaced by fixed figures in tests
+	pub(crate) memory: fn() -> MemoryInfo,
 }
 
 impl AppState {
@@ -55,7 +58,7 @@ impl AppState {
 	pub(crate) fn new<P: AsRef<Path>>(data_dir: P, auth: Option<Auth>) -> Result<Self, Box<dyn std::error::Error>> {
 		let generator = Generator::new(&data_dir)?;
 		let catalog = Catalog::new(&data_dir, &generator);
-		Ok(Self { generator: RwLock::new(generator), catalog, auth })
+		Ok(Self { generator: RwLock::new(generator), catalog, auth, memory: MemoryInfo::read })
 	}
 }
 

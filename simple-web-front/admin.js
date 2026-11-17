@@ -34,6 +34,8 @@ const modelFile = document.getElementById("model-file");
 const modelName = document.getElementById("model-name");
 const checkBtn = document.getElementById("check-btn");
 const addBtn = document.getElementById("add-btn");
+const forceRow = document.getElementById("force-row");
+const forceAdd = document.getElementById("force-add");
 const report = document.getElementById("report");
 
 const deleteModal = document.getElementById("delete-modal");
@@ -44,7 +46,8 @@ const deleteBtn = document.getElementById("delete-btn");
 const cancelDeleteBtn = document.getElementById("cancel-delete-btn");
 
 let refreshTimer = null;
-// File and name of the last check that passed: "Add the model" sends exactly them
+// File and name of the last check without problem: "Add the model" sends exactly them.
+// `risky` when the model fits only by using swap: the addition then needs the force box.
 let checked = null;
 // Model waiting for the delete confirmation
 let modelToDelete = null;
@@ -175,7 +178,8 @@ function renderMemory(data) {
     const figures = [
         ["Server process in RAM", formatBytes(data.memory.process_resident_bytes)],
         ["Server process in swap", formatBytes(data.memory.process_swap_bytes)],
-        ["Available for a new model", formatBytes(data.available_bytes)],
+        ["Available in RAM", formatBytes(data.available_bytes)],
+        ["Available with swap", formatBytes(data.available_with_swap_bytes)],
         ["Service memory limit", data.memory.service_limit_bytes ? formatBytes(data.memory.service_limit_bytes) : "none"],
         ["Kept free", formatBytes(data.limits.memory_margin_bytes)]
     ];
@@ -187,7 +191,8 @@ function renderMemory(data) {
         return [term, definition];
     }));
     addHint.textContent = `One word per line, UTF-8, at most ${formatBytes(data.limits.max_upload_bytes)} `
-        + `and ${data.limits.max_line_chars} characters per line. The check tells whether the server has the memory for it.`;
+        + `and ${data.limits.max_line_chars} characters per line. The check tells whether the server has the memory for it, `
+        + "in RAM or only by using swap.";
 }
 
 function actionButton(label, title, onClick, className = "action-btn") {
@@ -260,10 +265,17 @@ async function loadModels() {
     }
 }
 
-async function runAction(name, action) {
+// `force` is sent once the admin accepted that the model fits only by using swap
+async function runAction(name, action, force = false) {
     showMessage(modelsError, "");
     try {
-        const { ok, data } = await api("POST", `/models/${encodeURIComponent(name)}/${action}`);
+        const query = force ? "?force=true" : "";
+        const { status, ok, data } = await api("POST", `/models/${encodeURIComponent(name)}/${action}${query}`);
+        if (!ok && status === 422 && data.forceable && !force
+            && window.confirm(`${data.error}.\n\nShow '${name}' anyway?`)) {
+            await runAction(name, action, true);
+            return;
+        }
         if (!ok) {
             showMessage(modelsError, data.error);
         }
@@ -340,8 +352,16 @@ function nameFromFile(fileName) {
 function updateAddButtons() {
     const file = modelFile.files[0];
     checkBtn.disabled = !file || !modelName.value;
-    // "Add the model" sends only the file and the name whose check passed
-    addBtn.disabled = !checked || checked.file !== file || checked.name !== modelName.value;
+    // "Add the model" sends only the file and the name whose check passed;
+    // a model that fits only by using swap needs the force box too
+    const matches = checked !== null && checked.file === file && checked.name === modelName.value;
+    forceRow.classList.toggle("hidden", !(matches && checked.risky));
+    addBtn.disabled = !matches || (checked.risky && !forceAdd.checked);
+}
+
+function forgetCheck() {
+    checked = null;
+    forceAdd.checked = false;
 }
 
 modelFile.addEventListener("change", () => {
@@ -350,11 +370,12 @@ modelFile.addEventListener("change", () => {
         modelName.value = nameFromFile(file.name);
     }
     report.classList.add("hidden");
-    checked = null;
+    forgetCheck();
     updateAddButtons();
 });
 
 modelName.addEventListener("input", updateAddButtons);
+forceAdd.addEventListener("change", updateAddButtons);
 
 function renderReport(result, title) {
     const parts = [];
@@ -376,6 +397,7 @@ function renderReport(result, title) {
         parts.push(ul);
     };
     list(result.problems, "message message-error");
+    list(result.risks, "message message-warning");
     list(result.warnings, "message message-warning");
 
     if (result.count) {
@@ -387,7 +409,8 @@ function renderReport(result, title) {
             ["Max n", count.complete ? formatNumber(count.stats.max_n) : "unknown"],
             ["Memory once loaded (estimate)", formatBytes(result.estimated_bytes)],
             ["Memory while building (estimate)", formatBytes(result.needed_bytes)],
-            ["Available for a new model", formatBytes(result.available_bytes)]
+            ["Available in RAM", formatBytes(result.available_bytes)],
+            ["Available with swap", formatBytes(result.available_with_swap_bytes)]
         ];
         const dl = document.createElement("dl");
         dl.className = "figures";
@@ -409,13 +432,17 @@ checkBtn.addEventListener("click", async () => {
     const name = modelName.value;
     checkBtn.disabled = true;
     addBtn.disabled = true;
-    checked = null;
+    forgetCheck();
     try {
         const { status, data } = await api("POST", `/models/check?name=${encodeURIComponent(name)}`, file);
         if (status === 200) {
-            renderReport(data, data.ok ? "The model can be added" : "The model cannot be added");
-            if (data.ok) {
-                checked = { file, name };
+            const risky = data.problems.length === 0 && data.risks.length > 0;
+            const title = data.ok ? "The model can be added"
+                : risky ? "The model can be added only by using swap"
+                : "The model cannot be added";
+            renderReport(data, title);
+            if (data.ok || risky) {
+                checked = { file, name, risky };
             }
         } else {
             renderReport({ problems: [data.error] }, "The check failed");
@@ -429,19 +456,23 @@ checkBtn.addEventListener("click", async () => {
 });
 
 addBtn.addEventListener("click", async () => {
-    const { file, name } = checked;
+    const { file, name, risky } = checked;
+    const force = risky && forceAdd.checked;
     addBtn.disabled = true;
     checkBtn.disabled = true;
     try {
-        const { status, data } = await api("POST", `/models?name=${encodeURIComponent(name)}`, file);
+        const query = `name=${encodeURIComponent(name)}${force ? "&force=true" : ""}`;
+        const { status, data } = await api("POST", `/models?${query}`, file);
         if (status === 202) {
-            renderReport(data, "The build started: the model becomes shown once it generates words");
+            renderReport(data, force
+                ? "The build started, using swap: the model becomes shown once it generates words"
+                : "The build started: the model becomes shown once it generates words");
             modelFile.value = "";
             modelName.value = "";
-            checked = null;
+            forgetCheck();
         } else if (status === 422) {
             renderReport(data, "The model cannot be added");
-            checked = null;
+            forgetCheck();
         } else {
             renderReport({ problems: [data.error] }, "The addition failed");
         }

@@ -77,6 +77,10 @@
           <input type="text" id="model-name" maxlength="64" autocomplete="off" spellcheck="false"
                  title="1 to 64 lowercase letters, digits, '_' or '-', starting with a letter or a digit">
         </div>
+        <label id="force-row" class="force-row hidden">
+          <input type="checkbox" id="force-add">
+          Add it anyway: the server will use swap and the generation will be slower
+        </label>
         <div class="button-row">
           <button id="check-btn" class="action-btn fixed-btn" disabled>Check the file</button>
           <button id="add-btn" class="primary-btn fixed-btn" disabled

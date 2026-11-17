@@ -49,6 +49,16 @@ struct ErrorBody<'a> {
 	error: &'a str,
 }
 
+/// Body of a refusal that the admin may force: the model fits only by using swap.
+#[derive(Serialize)]
+struct RiskBody<'a> {
+	/// Why the action needs to be forced.
+	error: &'a str,
+
+	/// Always true: the same request with `force=true` is accepted.
+	forceable: bool,
+}
+
 /// Body of a successful action.
 #[derive(Serialize)]
 struct Done {
@@ -67,6 +77,7 @@ fn admin_error(error: &AdminError) -> HttpResponse {
 		AdminError::NotFound(message) => error_response(StatusCode::NOT_FOUND, message),
 		AdminError::Conflict(message) => error_response(StatusCode::CONFLICT, message),
 		AdminError::NotEnoughMemory(message) => error_response(StatusCode::UNPROCESSABLE_ENTITY, message),
+		AdminError::MemoryRisk(message) => HttpResponse::UnprocessableEntity().json(RiskBody { error: message, forceable: true }),
 		AdminError::Internal(message) => error_response(StatusCode::INTERNAL_SERVER_ERROR, message),
 	}
 }
@@ -191,8 +202,11 @@ struct ModelsResponse {
 	/// Memory of the server.
 	memory: MemoryInfo,
 
-	/// Memory a new model can still take, in bytes, if known.
+	/// Memory a new model can still take in RAM, in bytes, if known.
 	available_bytes: Option<u64>,
+
+	/// Memory a new model can still take in RAM and swap, in bytes, if known.
+	available_with_swap_bytes: Option<u64>,
 
 	/// Limits of the server.
 	limits: Limits,
@@ -202,11 +216,12 @@ struct ModelsResponse {
 async fn list_models(state: web::Data<AppState>) -> HttpResponse {
 	match state.catalog.list() {
 		Ok(models) => {
-			let memory = MemoryInfo::read();
+			let memory: MemoryInfo = (state.memory)();
 			HttpResponse::Ok().json(ModelsResponse {
 				models,
 				memory,
 				available_bytes: memory.available_bytes(),
+				available_with_swap_bytes: memory.available_with_swap_bytes(),
 				limits: Limits { max_upload_bytes: MAX_UPLOAD_BYTES, max_line_chars: MAX_LINE_CHARS, memory_margin_bytes: MEMORY_MARGIN_BYTES },
 			})
 		}
@@ -219,12 +234,24 @@ async fn list_models(state: web::Data<AppState>) -> HttpResponse {
 struct NameQuery {
 	/// Name of the new model.
 	name: String,
+
+	/// Adds the model even if it fits only by using swap (never if it has a problem).
+	#[serde(default)]
+	force: bool,
+}
+
+/// Query of `POST /v1/admin/models/{name}/show`.
+#[derive(Deserialize)]
+struct ForceQuery {
+	/// Loads the model even if it fits only by using swap.
+	#[serde(default)]
+	force: bool,
 }
 
 /// Checks a text file for the model `name`.
 fn check(state: &AppState, name: &str, bytes: &[u8]) -> CheckReport {
 	let taken = check::is_valid_name(name) && state.catalog.name_taken(name);
-	check::check_upload(name, taken, bytes, MemoryInfo::read().available_bytes())
+	check::check_upload(name, taken, bytes, (state.memory)().room())
 }
 
 /// `POST /v1/admin/models/check?name=<name>`, with the text file as body:
@@ -246,19 +273,20 @@ enum Addition {
 	Failed(AdminError),
 }
 
-/// `POST /v1/admin/models?name=<name>`, with the text file as body: checks it again,
-/// then builds the model in the background. The model is listed as building, then
-/// shown once it generates words, or listed as failed.
+/// `POST /v1/admin/models?name=<name>[&force=true]`, with the text file as body: checks it
+/// again, then builds the model in the background. The model is listed as building, then
+/// shown once it generates words, or listed as failed. With `force=true`, a model that
+/// fits only by using swap is added too; a problem still refuses it.
 ///
 /// # Returns
 /// - 202 Accepted with the check report: the build started
-/// - 422 Unprocessable Content with the check report: the check failed
+/// - 422 Unprocessable Content with the check report: the check failed, or found a risk without `force`
 /// - 409 Conflict if the name is taken or another model is being built
 async fn add_model(state: web::Data<AppState>, query: web::Query<NameQuery>, body: web::Bytes) -> HttpResponse {
 	let addition = web::block(move || {
-		let name = query.into_inner().name;
+		let NameQuery { name, force } = query.into_inner();
 		let report = check(&state, &name, &body);
-		if !report.ok {
+		if !report.problems.is_empty() || (!report.risks.is_empty() && !force) {
 			return Addition::Refused(report);
 		}
 		if let Err(error) = state.catalog.reserve(&name, &body) {
@@ -271,7 +299,11 @@ async fn add_model(state: web::Data<AppState>, query: web::Query<NameQuery>, bod
 		if let Err(e) = spawned {
 			state.catalog.abandon(&name, format!("Cannot start the build: {}", e));
 		}
-		eprintln!("admin: model '{}' added", name);
+		if report.risks.is_empty() {
+			eprintln!("admin: model '{}' added", name);
+		} else {
+			eprintln!("admin: model '{}' added, forced: it uses swap", name);
+		}
 		Addition::Started(report)
 	})
 	.await;
@@ -307,10 +339,17 @@ async fn hide_model(state: web::Data<AppState>, path: web::Path<String>) -> Http
 	run_action(state, path.into_inner(), "hidden", |state, name| state.catalog.hide(&state.generator, name)).await
 }
 
-/// `POST /v1/admin/models/{name}/show`: loads a hidden model again, if the memory allows it.
-async fn show_model(state: web::Data<AppState>, path: web::Path<String>) -> HttpResponse {
-	run_action(state, path.into_inner(), "shown", |state, name| {
-		state.catalog.show(&state.generator, name, MemoryInfo::read().available_bytes())
+/// `POST /v1/admin/models/{name}/show[?force=true]`: loads a hidden model again, if the
+/// memory allows it. With `force=true`, a model that fits only by using swap is loaded too.
+///
+/// # Returns
+/// - 200 OK: the model is shown
+/// - 422 Unprocessable Content: not enough memory, with `"forceable": true` when it fits by using swap
+async fn show_model(state: web::Data<AppState>, path: web::Path<String>, query: web::Query<ForceQuery>) -> HttpResponse {
+	let force = query.force;
+	let verb = if force { "shown, forced" } else { "shown" };
+	run_action(state, path.into_inner(), verb, move |state, name| {
+		state.catalog.show(&state.generator, name, (state.memory)().room(), force)
 	})
 	.await
 }
@@ -359,6 +398,36 @@ mod tests {
 	}
 
 	#[derive(Deserialize)]
+	struct FullReport {
+		ok: bool,
+		problems: Vec<String>,
+		risks: Vec<String>,
+	}
+
+	#[derive(Deserialize)]
+	struct Refusal {
+		forceable: Option<bool>,
+	}
+
+	#[derive(Deserialize)]
+	struct MemoryFigures {
+		available_bytes: Option<u64>,
+		available_with_swap_bytes: Option<u64>,
+	}
+
+	const GIGABYTE: u64 = 1_000_000_000;
+
+	// RAM full, plenty of swap: a new model fits only by using swap
+	fn swap_only() -> MemoryInfo {
+		MemoryInfo { system_available_bytes: Some(MEMORY_MARGIN_BYTES), system_swap_free_bytes: Some(GIGABYTE), ..MemoryInfo::default() }
+	}
+
+	// RAM and swap full: no new model fits
+	fn no_room() -> MemoryInfo {
+		MemoryInfo { system_available_bytes: Some(MEMORY_MARGIN_BYTES), system_swap_free_bytes: Some(0), ..MemoryInfo::default() }
+	}
+
+	#[derive(Deserialize)]
 	struct Models {
 		models: Vec<Model>,
 	}
@@ -377,6 +446,11 @@ mod tests {
 
 	// Creates a data directory dedicated to one test, and the state of a server reading it
 	fn state(test: &str, models: &[(&str, &str)], with_auth: bool) -> (web::Data<AppState>, PathBuf) {
+		state_with_memory(test, models, with_auth, MemoryInfo::read)
+	}
+
+	// The same, with the memory figures given by `memory`
+	fn state_with_memory(test: &str, models: &[(&str, &str)], with_auth: bool, memory: fn() -> MemoryInfo) -> (web::Data<AppState>, PathBuf) {
 		let dir = std::env::temp_dir().join(format!("rs-gen-admin-{}-{}", std::process::id(), test));
 		let _ = std::fs::remove_dir_all(&dir);
 		std::fs::create_dir_all(&dir).unwrap();
@@ -384,7 +458,9 @@ mod tests {
 			std::fs::write(dir.join(format!("{}.dat", name)), lines).unwrap();
 		}
 		let auth = if with_auth { Some(auth()) } else { None };
-		(web::Data::new(AppState::new(&dir, auth).unwrap()), dir)
+		let mut state = AppState::new(&dir, auth).unwrap();
+		state.memory = memory;
+		(web::Data::new(state), dir)
 	}
 
 	// Every route behind the session, as (method, path)
@@ -564,6 +640,66 @@ mod tests {
 		let response = test::call_service(&app, admin("DELETE", "/v1/admin/models/legumes").cookie(cookie.clone()).set_json(Confirm { confirm: "legumes" }).to_request()).await;
 		assert_eq!(response.status(), StatusCode::OK);
 		assert!(!dir.join("legumes.dat").exists() && !dir.join("legumes.bin").exists());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[actix_web::test]
+	async fn a_model_that_fits_only_with_swap_needs_force() {
+		let (state, dir) = state_with_memory("swap-only", &[("fruits", "pomme\npoire\n")], true, swap_only);
+		let app = test::init_service(App::new().app_data(state).configure(crate::configure)).await;
+		let cookie = login_cookie!(&app);
+
+		// The page shows both figures
+		let response = test::call_service(&app, admin("GET", "/v1/admin/models").cookie(cookie.clone()).to_request()).await;
+		let figures: MemoryFigures = test::read_body_json(response).await;
+		assert_eq!(figures.available_bytes, Some(MEMORY_MARGIN_BYTES));
+		assert_eq!(figures.available_with_swap_bytes, Some(MEMORY_MARGIN_BYTES + GIGABYTE));
+
+		// The check tells the risk, which is not a problem
+		let response = test::call_service(&app, admin("POST", "/v1/admin/models/check?name=legumes").cookie(cookie.clone()).set_payload("chou\ncarotte\n").to_request()).await;
+		assert_eq!(response.status(), StatusCode::OK);
+		let report: FullReport = test::read_body_json(response).await;
+		assert!(!report.ok);
+		assert!(report.problems.is_empty(), "{:?}", report.problems);
+		assert_eq!(report.risks.len(), 1);
+
+		// Without force: refused, nothing saved
+		let response = test::call_service(&app, admin("POST", "/v1/admin/models?name=legumes").cookie(cookie.clone()).set_payload("chou\ncarotte\n").to_request()).await;
+		assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+		assert!(!dir.join("legumes.dat").exists());
+
+		// Forced: added and built
+		let response = test::call_service(&app, admin("POST", "/v1/admin/models?name=legumes&force=true").cookie(cookie.clone()).set_payload("chou\ncarotte\n").to_request()).await;
+		assert_eq!(response.status(), StatusCode::ACCEPTED);
+		assert_eq!(wait_build!(&app, cookie, "legumes"), "shown");
+
+		// Showing it again follows the same rule
+		let response = test::call_service(&app, admin("POST", "/v1/admin/models/legumes/hide").cookie(cookie.clone()).to_request()).await;
+		assert_eq!(response.status(), StatusCode::OK);
+		let response = test::call_service(&app, admin("POST", "/v1/admin/models/legumes/show").cookie(cookie.clone()).to_request()).await;
+		assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+		let refusal: Refusal = test::read_body_json(response).await;
+		assert_eq!(refusal.forceable, Some(true));
+		let response = test::call_service(&app, admin("POST", "/v1/admin/models/legumes/show?force=true").cookie(cookie.clone()).to_request()).await;
+		assert_eq!(response.status(), StatusCode::OK);
+		let public = to_bytes(test::call_service(&app, TestRequest::get().uri("/v1/models").to_request()).await.into_body()).await.unwrap();
+		let mut names: Vec<&str> = std::str::from_utf8(&public).unwrap().lines().collect();
+		names.sort_unstable();
+		assert_eq!(names, vec!["fruits", "legumes"]);
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[actix_web::test]
+	async fn force_never_adds_a_model_that_does_not_fit_even_with_swap() {
+		let (state, dir) = state_with_memory("no-room", &[("fruits", "pomme\n")], true, no_room);
+		let app = test::init_service(App::new().app_data(state).configure(crate::configure)).await;
+		let cookie = login_cookie!(&app);
+		let response = test::call_service(&app, admin("POST", "/v1/admin/models?name=legumes&force=true").cookie(cookie).set_payload("chou\ncarotte\n").to_request()).await;
+		assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+		let report: FullReport = test::read_body_json(response).await;
+		assert!(!report.ok);
+		assert!(!report.problems.is_empty());
+		assert!(!dir.join("legumes.dat").exists());
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 
