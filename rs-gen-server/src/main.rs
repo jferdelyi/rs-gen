@@ -16,6 +16,9 @@ use rs_gen_core::model::generator::Generator;
 use rs_gen_core::model::prediction_input::StartSeed;
 use serde::Deserialize;
 
+/// Highest number of attempts to avoid duplicates (the web front sends at most 100).
+const MAX_NB_TRY: usize = 1000;
+
 /// Query parameters for the `/v1/generate` endpoint
 #[derive(Deserialize)]
 struct GenerateParams {
@@ -57,6 +60,19 @@ impl AppState {
 }
 
 impl GenerateParams {
+	/// Returns the number of attempts to avoid duplicates (default 5).
+	///
+	/// # Errors
+	/// Returns an error above `MAX_NB_TRY`: each attempt generates a word, so a huge
+	/// value would keep the server busy for minutes.
+	fn nb_try(&self) -> Result<usize, String> {
+		match self.nb_try {
+			None => Ok(5),
+			Some(n) if n <= MAX_NB_TRY => Ok(n),
+			Some(n) => Err(format!("nb_try must be at most {}, got {}", MAX_NB_TRY, n)),
+		}
+	}
+
 	/// Computes the starting seed strategy for sequence generation
 	///
 	/// # Returns
@@ -117,7 +133,10 @@ async fn get_generated(
 	query: web::Query<GenerateParams>,
 ) -> impl Responder {
 	let max_n = query.max_n.unwrap_or(0);
-	let nb_try = query.nb_try.unwrap_or(5);
+	let nb_try = match query.nb_try() {
+		Ok(n) => n,
+		Err(e) => return HttpResponse::BadRequest().body(e),
+	};
 	let randomness = query.randomness.unwrap_or(0.1);
 	let reduce_random = query.reduce_random.unwrap_or(false);
 
@@ -234,3 +253,37 @@ async fn main() -> std::io::Result<()> {
 		.await
 }
 
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use actix_web::http::StatusCode;
+	use actix_web::test::{self, TestRequest};
+
+	fn params(nb_try: Option<usize>) -> GenerateParams {
+		GenerateParams { max_n: None, nb_try, randomness: None, reduce_random: None, seed: None, intensity: None }
+	}
+
+	#[test]
+	fn nb_try_is_bounded() {
+		assert_eq!(params(None).nb_try(), Ok(5));
+		assert_eq!(params(Some(MAX_NB_TRY)).nb_try(), Ok(MAX_NB_TRY));
+		assert!(params(Some(MAX_NB_TRY + 1)).nb_try().is_err());
+	}
+
+	#[actix_web::test]
+	async fn a_huge_nb_try_is_refused_at_once() {
+		// The only word of the model always exists: every attempt fails, up to nb_try
+		let dir = std::env::temp_dir().join(format!("rs-gen-server-{}-nb-try", std::process::id()));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		std::fs::write(dir.join("low.dat"), "abc\n").unwrap();
+		let state = web::Data::new(AppState::new(&dir, None).unwrap());
+		let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+		let response = test::call_service(&app, TestRequest::get().uri("/v1/generate?nb_try=1000000000&intensity=low:1").to_request()).await;
+		assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+		let response = test::call_service(&app, TestRequest::get().uri("/v1/generate?nb_try=1000&intensity=low:1").to_request()).await;
+		assert_eq!(response.status(), StatusCode::OK);
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+}
