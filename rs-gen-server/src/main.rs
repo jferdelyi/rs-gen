@@ -1,8 +1,17 @@
-use std::sync::Mutex;
+mod admin;
+mod auth;
+mod catalog;
+mod check;
+mod system;
+
+use std::path::Path;
+use std::sync::RwLock;
 
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder, http};
 use actix_cors::Cors;
 
+use auth::Auth;
+use catalog::Catalog;
 use rs_gen_core::model::generator::Generator;
 use rs_gen_core::model::prediction_input::StartSeed;
 use serde::Deserialize;
@@ -25,9 +34,26 @@ struct GenerateParams {
 	intensity: Option<String>,
 }
 
-/// Shared application state for Actix, wrapping the generator in a Mutex
-struct SharedData {
-	model: Generator,
+/// Shared application state for Actix
+pub(crate) struct AppState {
+	/// Loaded models: read by the generation, changed by the admin routes
+	pub(crate) generator: RwLock<Generator>,
+	/// Model files of the data directory and their status
+	pub(crate) catalog: Catalog,
+	/// Admin password and sessions, `None` when the admin routes are disabled
+	pub(crate) auth: Option<Auth>,
+}
+
+impl AppState {
+	/// Loads the models of `data_dir` and creates the state of the server.
+	///
+	/// # Errors
+	/// Returns an error if the directory or a model cannot be read.
+	pub(crate) fn new<P: AsRef<Path>>(data_dir: P, auth: Option<Auth>) -> Result<Self, Box<dyn std::error::Error>> {
+		let generator = Generator::new(&data_dir)?;
+		let catalog = Catalog::new(&data_dir, &generator);
+		Ok(Self { generator: RwLock::new(generator), catalog, auth })
+	}
 }
 
 impl GenerateParams {
@@ -84,10 +110,10 @@ impl GenerateParams {
 /// # Returns
 /// - 200 OK with generated sequence
 /// - 400 BadRequest if parameters are invalid
-/// - 500 InternalServerError if the model is unavailable or mutex lock fails
+/// - 500 InternalServerError if the model is unavailable or the lock fails
 #[get("/v1/generate")]
 async fn get_generated(
-	data: web::Data<Mutex<SharedData>>,
+	data: web::Data<AppState>,
 	query: web::Query<GenerateParams>,
 ) -> impl Responder {
 	let max_n = query.max_n.unwrap_or(0);
@@ -100,13 +126,13 @@ async fn get_generated(
 		Err(e) => return HttpResponse::BadRequest().body(e),
 	};
 
-	let shared_data = match data.lock() {
-		Ok(m) => m,
+	let generator = match data.generator.read() {
+		Ok(g) => g,
 		Err(_) => return HttpResponse::InternalServerError().body("Model lock failed"),
 	};
 
 	// Prepare prediction input
-	let mut input = shared_data.model.make_prediction_input();
+	let mut input = generator.make_prediction_input();
 	input.max_n = max_n;
 	input.nb_try = nb_try;
 	if let Err(e) = input.set_randomness(randomness) {
@@ -133,7 +159,7 @@ async fn get_generated(
 		}
 	}
 
-	match shared_data.model.predict(&input) {
+	match generator.predict(&input) {
 		Ok(result) => HttpResponse::Ok().body(result),
 		Err(e) => HttpResponse::InternalServerError().body(e),
 	}
@@ -141,33 +167,56 @@ async fn get_generated(
 
 /// HTTP GET `/v1/models` endpoint
 ///
-/// Returns a newline-separated list of all loaded model names.
+/// Returns a newline-separated list of the loaded model names (the hidden ones are not loaded).
 #[get("/v1/models")]
-async fn get_models(data: web::Data<Mutex<SharedData>>) -> impl Responder {
-	let shared_data = match data.lock() {
-		Ok(m) => m,
+async fn get_models(data: web::Data<AppState>) -> impl Responder {
+	let generator = match data.generator.read() {
+		Ok(g) => g,
 		Err(_) => return HttpResponse::InternalServerError().body("Model lock failed"),
 	};
-	HttpResponse::Ok().body(shared_data.model.get_model_names().join("\n"))
+	HttpResponse::Ok().body(generator.get_model_names().join("\n"))
+}
+
+/// Registers every route: the public ones and the admin ones.
+pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
+	cfg.service(get_generated).service(get_models).configure(admin::configure);
 }
 
 /// Main entry point for the Actix web server
 ///
-/// Loads the generator, wraps it in a mutex, and starts an HTTP server.
+/// Loads the models, then starts an HTTP server.
+/// `rs-gen-server hash-password` reads a password on the standard input and prints its hash instead.
 ///
 /// # Notes
 /// - Binds to 127.0.0.1:5000
-/// - Currently, a model path is hardcoded; should be configurable in the future
-/// - Handles concurrency via `Mutex`
+/// - Currently, the model path is hardcoded (`./data`); should be configurable in the future
+/// - The admin routes are enabled when `RSGEN_ADMIN_HASH_FILE` names a password hash file
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-	let generator = match Generator::new("./data") {
-		Ok(g) => g,
+	if std::env::args().nth(1).as_deref() == Some("hash-password") {
+		if let Err(e) = auth::run_hash_password() {
+			eprintln!("{}", e);
+			std::process::exit(1);
+		}
+		return Ok(());
+	}
+
+	// A missing or invalid hash disables the admin routes only: the public routes keep running
+	let auth = match Auth::from_env() {
+		Ok(Some(a)) => Some(a),
+		Ok(None) => {
+			eprintln!("admin: disabled, {} is not set", auth::HASH_FILE_ENV);
+			None
+		}
+		Err(e) => {
+			eprintln!("admin: disabled, {}", e);
+			None
+		}
+	};
+	let state = match AppState::new("./data", auth) {
+		Ok(s) => web::Data::new(s),
 		Err(e) => panic!("Failed to load model: {}", e),
 	};
-
-	let shared_data = SharedData { model: generator };
-	let shared_model = web::Data::new(Mutex::new(shared_data));
 
 	HttpServer::new(move || {
 		App::new()
@@ -177,11 +226,11 @@ async fn main() -> std::io::Result<()> {
 					.allowed_methods(vec!["GET", "POST", "OPTIONS"])
 					.allowed_header(http::header::CONTENT_TYPE)
 			)
-			.app_data(shared_model.clone())
-			.service(get_generated)
-			.service(get_models)
+			.app_data(state.clone())
+			.configure(configure)
 	})
 		.bind(("127.0.0.1", 5000))?
 		.run()
 		.await
 }
+
