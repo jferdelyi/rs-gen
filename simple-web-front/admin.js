@@ -1,0 +1,478 @@
+// The page never runs inside a frame: another site could show it under its own page
+// and trick a click on its buttons. Stopped here, nothing of the page is shown.
+if (window.top !== window.self) {
+    throw new Error("The admin page cannot run inside a frame");
+}
+
+// Same origin as the page: the session cookie is sent to the admin routes only.
+// nginx forwards /generator/api/ to rs-gen-server.
+const ADMIN_URL = "/generator/api/v1/admin";
+
+// Header required on every admin request
+const ADMIN_HEADER = "X-Rs-Gen-Admin";
+
+// Refresh period of the list while a model is being built
+const BUILD_REFRESH_MS = 2000;
+
+/* =============================
+   DOM References
+============================= */
+const loginCard = document.getElementById("login-card");
+const loginForm = document.getElementById("login-form");
+const password = document.getElementById("password");
+const loginBtn = document.getElementById("login-btn");
+const loginError = document.getElementById("login-error");
+
+const adminPanel = document.getElementById("admin-panel");
+const logoutBtn = document.getElementById("logout-btn");
+const memory = document.getElementById("memory");
+const models = document.getElementById("models");
+const modelsError = document.getElementById("models-error");
+
+const addHint = document.getElementById("add-hint");
+const modelFile = document.getElementById("model-file");
+const modelName = document.getElementById("model-name");
+const checkBtn = document.getElementById("check-btn");
+const addBtn = document.getElementById("add-btn");
+const report = document.getElementById("report");
+
+const deleteModal = document.getElementById("delete-modal");
+const deleteName = document.getElementById("delete-name");
+const deleteConfirm = document.getElementById("delete-confirm");
+const deleteError = document.getElementById("delete-error");
+const deleteBtn = document.getElementById("delete-btn");
+const cancelDeleteBtn = document.getElementById("cancel-delete-btn");
+
+let refreshTimer = null;
+// File and name of the last check that passed: "Add the model" sends exactly them
+let checked = null;
+// Model waiting for the delete confirmation
+let modelToDelete = null;
+
+/* =============================
+   Formatting
+============================= */
+const numberFormat = new Intl.NumberFormat("en-US");
+
+function formatNumber(value) {
+    return value === null || value === undefined ? "not loaded" : numberFormat.format(value);
+}
+
+// Every size is shown in megabytes, with two decimals, as in the messages of the server
+function formatBytes(bytes) {
+    if (bytes === null || bytes === undefined) {
+        return "unknown";
+    }
+    if (bytes > 0 && bytes < 10000) {
+        return "< 0.01 MB";
+    }
+    return `${(bytes / 1e6).toFixed(2)} MB`;
+}
+
+function formatDate(seconds) {
+    if (seconds === null || seconds === undefined) {
+        return "unknown";
+    }
+    const date = new Date(seconds * 1000);
+    const pad = value => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+const STATUS_LABELS = {
+    shown: "Shown",
+    hidden: "Hidden",
+    building: "Building",
+    failed: "Failed"
+};
+
+/* =============================
+   API
+============================= */
+class LoginRequired extends Error {}
+
+// Calls an admin route. `body` is sent as JSON, or as is for a file.
+async function api(method, path, body) {
+    const options = { method, headers: { [ADMIN_HEADER]: "1" }, credentials: "same-origin" };
+    if (body instanceof File) {
+        options.headers["Content-Type"] = "application/octet-stream";
+        options.body = body;
+    } else if (body !== undefined) {
+        options.headers["Content-Type"] = "application/json";
+        options.body = JSON.stringify(body);
+    }
+    const response = await fetch(`${ADMIN_URL}${path}`, options);
+    if (response.status === 401 && path !== "/login") {
+        showLogin();
+        throw new LoginRequired();
+    }
+    let data = null;
+    try {
+        data = await response.json();
+    } catch {
+        data = { error: `The server answered ${response.status}` };
+    }
+    return { status: response.status, ok: response.ok, data };
+}
+
+function showMessage(element, text) {
+    element.textContent = text;
+    element.classList.toggle("hidden", !text);
+}
+
+/* =============================
+   Login
+============================= */
+function showLogin() {
+    stopRefresh();
+    adminPanel.classList.add("hidden");
+    loginCard.classList.remove("hidden");
+    password.focus();
+}
+
+async function showPanel() {
+    loginCard.classList.add("hidden");
+    adminPanel.classList.remove("hidden");
+    await loadModels();
+}
+
+loginForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    loginBtn.disabled = true;
+    showMessage(loginError, "");
+    try {
+        const { ok, data } = await api("POST", "/login", { password: password.value });
+        if (ok) {
+            password.value = "";
+            await showPanel();
+        } else {
+            showMessage(loginError, data.error);
+        }
+    } catch (error) {
+        showMessage(loginError, `The server cannot be reached: ${error.message}`);
+    } finally {
+        loginBtn.disabled = false;
+    }
+});
+
+logoutBtn.addEventListener("click", async () => {
+    try {
+        await api("POST", "/logout");
+    } catch {
+        // Logged out anyway
+    }
+    showLogin();
+});
+
+/* =============================
+   Models
+============================= */
+function stopRefresh() {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+}
+
+function renderMemory(data) {
+    const figures = [
+        ["Server process in RAM", formatBytes(data.memory.process_resident_bytes)],
+        ["Server process in swap", formatBytes(data.memory.process_swap_bytes)],
+        ["Available for a new model", formatBytes(data.available_bytes)],
+        ["Service memory limit", data.memory.service_limit_bytes ? formatBytes(data.memory.service_limit_bytes) : "none"],
+        ["Kept free", formatBytes(data.limits.memory_margin_bytes)]
+    ];
+    memory.replaceChildren(...figures.flatMap(([label, value]) => {
+        const term = document.createElement("dt");
+        term.textContent = label;
+        const definition = document.createElement("dd");
+        definition.textContent = value;
+        return [term, definition];
+    }));
+    addHint.textContent = `One word per line, UTF-8, at most ${formatBytes(data.limits.max_upload_bytes)} `
+        + `and ${data.limits.max_line_chars} characters per line. The check tells whether the server has the memory for it.`;
+}
+
+function actionButton(label, title, onClick, className = "action-btn") {
+    const button = document.createElement("button");
+    button.className = `${className} small-btn`;
+    button.textContent = label;
+    button.title = title;
+    button.addEventListener("click", onClick);
+    return button;
+}
+
+function renderModels(list) {
+    models.replaceChildren(...list.map(model => {
+        const row = document.createElement("tr");
+        const cell = (text, className = "") => {
+            const td = document.createElement("td");
+            td.textContent = text;
+            if (className) {
+                td.className = className;
+            }
+            row.appendChild(td);
+            return td;
+        };
+
+        cell(model.name, "model-name");
+        const status = cell(STATUS_LABELS[model.status] || model.status);
+        status.classList.add("status", `status-${model.status}`);
+        if (model.error) {
+            status.title = model.error;
+        }
+        cell(formatNumber(model.stats?.sentences), "number");
+        cell(formatNumber(model.stats?.states), "number");
+        cell(formatNumber(model.stats?.max_n), "number");
+        cell(model.estimated_bytes === null ? "not loaded" : formatBytes(model.estimated_bytes), "number");
+        cell(formatBytes(model.dat_bytes), "number");
+        cell(formatBytes(model.bin_bytes), "number");
+        cell(formatDate(model.modified));
+
+        const actions = cell("", "actions");
+        if (model.status === "shown") {
+            actions.appendChild(actionButton("Hide", "Remove from the generator and free its memory; the files are kept", () => runAction(model.name, "hide")));
+        } else if (model.status === "hidden") {
+            actions.appendChild(actionButton("Show", "Load it again into the generator, if the memory allows it", () => runAction(model.name, "show")));
+        }
+        if (model.status !== "building") {
+            actions.appendChild(actionButton("Delete", "Delete its files for good", () => openDelete(model.name), "danger-btn"));
+        }
+        return row;
+    }));
+}
+
+async function loadModels() {
+    stopRefresh();
+    try {
+        const { ok, data } = await api("GET", "/models");
+        if (!ok) {
+            showMessage(modelsError, data.error);
+            return;
+        }
+        showMessage(modelsError, "");
+        renderMemory(data);
+        renderModels(data.models);
+        if (data.models.some(model => model.status === "building")) {
+            refreshTimer = setTimeout(loadModels, BUILD_REFRESH_MS);
+        }
+    } catch (error) {
+        if (!(error instanceof LoginRequired)) {
+            showMessage(modelsError, `The server cannot be reached: ${error.message}`);
+        }
+    }
+}
+
+async function runAction(name, action) {
+    showMessage(modelsError, "");
+    try {
+        const { ok, data } = await api("POST", `/models/${encodeURIComponent(name)}/${action}`);
+        if (!ok) {
+            showMessage(modelsError, data.error);
+        }
+    } catch (error) {
+        if (!(error instanceof LoginRequired)) {
+            showMessage(modelsError, `The server cannot be reached: ${error.message}`);
+        }
+    }
+    await loadModels();
+}
+
+/* =============================
+   Delete
+============================= */
+function openDelete(name) {
+    modelToDelete = name;
+    deleteName.textContent = name;
+    deleteConfirm.value = "";
+    deleteBtn.disabled = true;
+    showMessage(deleteError, "");
+    deleteModal.classList.remove("hidden");
+    deleteConfirm.focus();
+}
+
+function closeDelete() {
+    modelToDelete = null;
+    deleteModal.classList.add("hidden");
+}
+
+deleteConfirm.addEventListener("input", () => {
+    deleteBtn.disabled = deleteConfirm.value !== modelToDelete;
+});
+
+cancelDeleteBtn.addEventListener("click", closeDelete);
+
+deleteModal.addEventListener("mousedown", event => {
+    if (event.target === deleteModal) {
+        closeDelete();
+    }
+});
+
+deleteBtn.addEventListener("click", async () => {
+    deleteBtn.disabled = true;
+    try {
+        const { ok, data } = await api("DELETE", `/models/${encodeURIComponent(modelToDelete)}`, { confirm: deleteConfirm.value });
+        if (!ok) {
+            showMessage(deleteError, data.error);
+            deleteBtn.disabled = false;
+            return;
+        }
+        closeDelete();
+        await loadModels();
+    } catch (error) {
+        if (!(error instanceof LoginRequired)) {
+            showMessage(deleteError, `The server cannot be reached: ${error.message}`);
+            deleteBtn.disabled = false;
+        }
+    }
+});
+
+/* =============================
+   Add
+============================= */
+// Suggests a valid model name from the file name
+function nameFromFile(fileName) {
+    return fileName
+        .replace(/\.[^.]*$/, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "_")
+        .replace(/^[_-]+/, "")
+        .slice(0, 64);
+}
+
+function updateAddButtons() {
+    const file = modelFile.files[0];
+    checkBtn.disabled = !file || !modelName.value;
+    // "Add the model" sends only the file and the name whose check passed
+    addBtn.disabled = !checked || checked.file !== file || checked.name !== modelName.value;
+}
+
+modelFile.addEventListener("change", () => {
+    const file = modelFile.files[0];
+    if (file && !modelName.value) {
+        modelName.value = nameFromFile(file.name);
+    }
+    report.classList.add("hidden");
+    checked = null;
+    updateAddButtons();
+});
+
+modelName.addEventListener("input", updateAddButtons);
+
+function renderReport(result, title) {
+    const parts = [];
+    const heading = document.createElement("h4");
+    heading.textContent = title;
+    parts.push(heading);
+
+    const list = (items, className) => {
+        if (!items || items.length === 0) {
+            return;
+        }
+        const ul = document.createElement("ul");
+        ul.className = className;
+        for (const item of items) {
+            const li = document.createElement("li");
+            li.textContent = item;
+            ul.appendChild(li);
+        }
+        parts.push(ul);
+    };
+    list(result.problems, "message message-error");
+    list(result.warnings, "message message-warning");
+
+    if (result.count) {
+        const count = result.count;
+        const figures = [
+            ["Lines", formatNumber(count.lines)],
+            ["Distinct words", formatNumber(count.stats.sentences)],
+            ["States", count.complete ? formatNumber(count.stats.states) : `more than ${formatNumber(count.stats.states)}`],
+            ["Max n", count.complete ? formatNumber(count.stats.max_n) : "unknown"],
+            ["Memory once loaded (estimate)", formatBytes(result.estimated_bytes)],
+            ["Memory while building (estimate)", formatBytes(result.needed_bytes)],
+            ["Available for a new model", formatBytes(result.available_bytes)]
+        ];
+        const dl = document.createElement("dl");
+        dl.className = "figures";
+        for (const [label, value] of figures) {
+            const term = document.createElement("dt");
+            term.textContent = label;
+            const definition = document.createElement("dd");
+            definition.textContent = value;
+            dl.append(term, definition);
+        }
+        parts.push(dl);
+    }
+    report.replaceChildren(...parts);
+    report.classList.remove("hidden");
+}
+
+checkBtn.addEventListener("click", async () => {
+    const file = modelFile.files[0];
+    const name = modelName.value;
+    checkBtn.disabled = true;
+    addBtn.disabled = true;
+    checked = null;
+    try {
+        const { status, data } = await api("POST", `/models/check?name=${encodeURIComponent(name)}`, file);
+        if (status === 200) {
+            renderReport(data, data.ok ? "The model can be added" : "The model cannot be added");
+            if (data.ok) {
+                checked = { file, name };
+            }
+        } else {
+            renderReport({ problems: [data.error] }, "The check failed");
+        }
+    } catch (error) {
+        if (!(error instanceof LoginRequired)) {
+            renderReport({ problems: [`The server cannot be reached: ${error.message}`] }, "The check failed");
+        }
+    }
+    updateAddButtons();
+});
+
+addBtn.addEventListener("click", async () => {
+    const { file, name } = checked;
+    addBtn.disabled = true;
+    checkBtn.disabled = true;
+    try {
+        const { status, data } = await api("POST", `/models?name=${encodeURIComponent(name)}`, file);
+        if (status === 202) {
+            renderReport(data, "The build started: the model becomes shown once it generates words");
+            modelFile.value = "";
+            modelName.value = "";
+            checked = null;
+        } else if (status === 422) {
+            renderReport(data, "The model cannot be added");
+            checked = null;
+        } else {
+            renderReport({ problems: [data.error] }, "The addition failed");
+        }
+    } catch (error) {
+        if (!(error instanceof LoginRequired)) {
+            renderReport({ problems: [`The server cannot be reached: ${error.message}`] }, "The addition failed");
+        }
+    }
+    updateAddButtons();
+    await loadModels();
+});
+
+/* =============================
+   Init
+============================= */
+async function init() {
+    try {
+        const { ok, data } = await api("GET", "/session");
+        if (ok) {
+            await showPanel();
+            return;
+        }
+        // The admin is disabled, or the request was refused
+        showMessage(loginError, data.error);
+    } catch (error) {
+        if (error instanceof LoginRequired) {
+            return;
+        }
+        showMessage(loginError, `The server cannot be reached: ${error.message}`);
+    }
+    showLogin();
+}
+
+init();
