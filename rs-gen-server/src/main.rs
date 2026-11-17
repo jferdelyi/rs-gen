@@ -100,7 +100,7 @@ async fn get_generated(
 		Err(e) => return HttpResponse::BadRequest().body(e),
 	};
 
-	let mut shared_data = match data.lock() {
+	let shared_data = match data.lock() {
 		Ok(m) => m,
 		Err(_) => return HttpResponse::InternalServerError().body("Model lock failed"),
 	};

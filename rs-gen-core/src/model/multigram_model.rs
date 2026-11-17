@@ -2,6 +2,7 @@ use super::ngram_model::NGramModel;
 use crate::hash::{FastHashMap, FastHashSet};
 use crate::io::{build_output_path, get_filename, read_file};
 use serde::{Deserialize, Serialize};
+use std::hash::{DefaultHasher, Hasher};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
@@ -13,6 +14,77 @@ pub(crate) const END_CHAR: char = '>';
 /// Bump its version whenever the serialized layout changes: a cache with another
 /// header is rebuilt from the text file instead of being misread.
 const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-4\n";
+
+/// Size of a model, as built from its text file.
+///
+/// `MultiGramModel::stats` reads it from a model, and `MultiGramModel::count_text`
+/// gives the same values from a text, without building the model.
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ModelStats {
+	/// Number of distinct sentences, compared in lowercase.
+	pub sentences: usize,
+
+	/// UTF-8 bytes of the distinct sentences, stored lowercase.
+	pub sentence_bytes: usize,
+
+	/// Highest n-gram order, 0 for an empty model.
+	pub max_n: usize,
+
+	/// Number of states (prefixes) over every order.
+	pub states: usize,
+
+	/// UTF-8 bytes of the state prefixes.
+	pub key_bytes: usize,
+}
+
+impl ModelStats {
+	/// Memory of a state besides the bytes of its prefix: its slot in the table,
+	/// the allocation of its prefix and its extra transitions, on average.
+	const BYTES_PER_STATE: u64 = 88;
+
+	/// Memory of a sentence besides its bytes: its slot in the table and its allocation.
+	const BYTES_PER_SENTENCE: u64 = 48;
+
+	/// Estimated memory of the loaded model, in bytes.
+	///
+	/// Calibrated on a Linux server (musl allocator) holding 11 models: 5.9 million states
+	/// took 581 MB, about 84 bytes per state besides the prefixes. An estimate, not a measure:
+	/// the system allocator of macOS takes about 20 % more.
+	pub fn estimated_bytes(&self) -> u64 {
+		self.states as u64 * Self::BYTES_PER_STATE
+			+ self.key_bytes as u64
+			+ self.sentences as u64 * Self::BYTES_PER_SENTENCE
+			+ self.sentence_bytes as u64
+	}
+
+	/// Estimated peak memory while `MultiGramModel::new` builds the model
+	/// from a text file of `text_bytes` bytes, in bytes.
+	///
+	/// The partial models built in parallel are merged into the final one: on a real
+	/// model, the peak reached 2.3 times the memory of the loaded model.
+	pub fn estimated_build_bytes(&self, text_bytes: u64) -> u64 {
+		self.estimated_bytes() * 5 / 2 + text_bytes * 4
+	}
+}
+
+/// What a text file would give once learned, from `MultiGramModel::count_text`.
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TextCount {
+	/// Number of lines.
+	pub lines: usize,
+
+	/// Number of empty lines (each one is learned as an empty word).
+	pub empty_lines: usize,
+
+	/// Length of the longest line, in characters.
+	pub max_line_chars: usize,
+
+	/// Size of the model that the text would build, partial when `complete` is false.
+	pub stats: ModelStats,
+
+	/// False when the count stopped at its state limit.
+	pub complete: bool,
+}
 
 /// Top-level n-gram model containing multiple n-gram sizes and metadata for sequence generation.
 ///
@@ -149,7 +221,98 @@ impl MultiGramModel {
 		&self.name
 	}
 
+	/// Returns the size of the model: sentences, states and their bytes.
+	pub fn stats(&self) -> ModelStats {
+		let mut stats = ModelStats {
+			sentences: self.sentences.len(),
+			sentence_bytes: self.sentences.iter().map(|sentence| sentence.len()).sum(),
+			max_n: self.ngrams.keys().copied().max().unwrap_or(0),
+			..ModelStats::default()
+		};
+		for model in self.ngrams.values() {
+			let (states, key_bytes) = model.states_and_key_bytes();
+			stats.states += states;
+			stats.key_bytes += key_bytes;
+		}
+		stats
+	}
 
+	/// Returns the number of transitions over every state of every order.
+	pub fn transition_count(&self) -> usize {
+		self.ngrams.values().map(NGramModel::transition_count).sum()
+	}
+
+	/// Counts what `add_sentence` would build from each line of `text`, without building it.
+	///
+	/// # Parameters
+	/// - `text`: the content of a text file, one sentence per line.
+	/// - `max_states`: the count stops once the states exceed it.
+	///
+	/// # Notes
+	/// - Each state is recorded as a 64-bit fingerprint, several times smaller than the state:
+	///   a text too big to be learned is detected without running out of memory.
+	/// - The fingerprints come from SipHash: the fast hasher of the tables gives the same
+	///   64 bits to words that differ only by their last byte ("susanna", "susannah").
+	/// - The statistics are the ones `stats` gives once the text is learned, as long as
+	///   no two fingerprints collide (less than 1 chance in 3 000 below 100 million states).
+	pub fn count_text(text: &str, max_states: usize) -> TextCount {
+		let mut count = TextCount { complete: true, ..TextCount::default() };
+		let mut states: FastHashSet<u64> = FastHashSet::default();
+		let mut sentences: FastHashSet<u64> = FastHashSet::default();
+		let mut chars: Vec<char> = Vec::new();
+
+		for line in text.lines() {
+			count.lines += 1;
+			if line.is_empty() {
+				count.empty_lines += 1;
+			}
+			count.max_line_chars = count.max_line_chars.max(line.chars().count());
+
+			let lowercase = line.to_lowercase();
+			let mut hasher = DefaultHasher::new();
+			hasher.write(lowercase.as_bytes());
+			if sentences.insert(hasher.finish()) {
+				count.stats.sentences += 1;
+				count.stats.sentence_bytes += lowercase.len();
+			}
+
+			// Same markers as `add_sentence`
+			chars.clear();
+			if !line.starts_with(START_CHAR) {
+				chars.push(START_CHAR);
+			}
+			chars.extend(line.chars());
+			if !line.ends_with(END_CHAR) {
+				chars.push(END_CHAR);
+			}
+			count.stats.max_n = count.stats.max_n.max(chars.len());
+
+			// A state of order n is a lowercase prefix of n - 1 characters followed by one
+			// more character: every substring that does not end on the last character
+			for start in 0..chars.len() - 1 {
+				let mut hasher = DefaultHasher::new();
+				let mut key_bytes = 0;
+				for end in start + 1..chars.len() {
+					for c in chars[end - 1].to_lowercase() {
+						hasher.write_u32(u32::from(c));
+						key_bytes += c.len_utf8();
+					}
+					// The order tells apart equal prefixes of different models
+					let mut state = hasher.clone();
+					state.write_usize(end - start);
+					if states.insert(state.finish()) {
+						count.stats.states += 1;
+						count.stats.key_bytes += key_bytes;
+						if count.stats.states > max_states {
+							count.complete = false;
+							return count;
+						}
+					}
+				}
+			}
+		}
+		count
+	}
 
 	/// Returns the last `n` characters of a string (UTF-8 safe), without copying them.
 	fn last_n_chars(s: &str, n: usize) -> &str {
@@ -426,5 +589,63 @@ mod tests {
 		assert_eq!(model.dump(), states_of_ab());
 		assert_ne!(std::fs::read(dir.join("words.bin")).unwrap(), stale_bytes);
 		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	// Learns every line of a text, as `read_database_file` does
+	fn model_of(text: &str) -> MultiGramModel {
+		let mut model = MultiGramModel::default();
+		for line in text.lines() {
+			model.add_sentence(line);
+		}
+		model
+	}
+
+	#[test]
+	fn stats_counts_the_sentences_and_the_states() {
+		let model = model_of("ab\n");
+		// States "<", "a", "b", "<a", "ab", "<ab": 10 bytes
+		assert_eq!(model.stats(), ModelStats { sentences: 1, sentence_bytes: 2, max_n: 4, states: 6, key_bytes: 10 });
+		assert_eq!(model.transition_count(), 6);
+		assert_eq!(MultiGramModel::default().stats(), ModelStats::default());
+	}
+
+	#[test]
+	fn count_text_gives_the_stats_of_the_learned_text() {
+		let texts = [
+			"ab\nab\n",
+			"Paris\nparis\nPARIS\n",
+			"Saint-Étienne\nÉté\nété\n",
+			"<ab>\n<x\ny>\n<\n>\n",
+			"\n\nab\n",
+			"İstanbul\nistanbul\n",
+			"aaaa\naaab\nbaaa\n",
+			"a\r\nb\r\n",
+			"",
+			// Pairs that differ only by their last byte
+			"Susanna\nSusannah\nacademics\nacademise\nberakot\nberakoth\n",
+			// "İ" lowercases to two characters: "<İ" and "<i\u{307}" give the same prefix
+			// for two different orders, hence two states
+			"İ\ni\u{307}\n",
+		];
+		for text in texts {
+			let count = MultiGramModel::count_text(text, usize::MAX);
+			assert!(count.complete, "{:?}", text);
+			assert_eq!(count.stats, model_of(text).stats(), "{:?}", text);
+		}
+	}
+
+	#[test]
+	fn count_text_stops_at_the_state_limit() {
+		// "<abcdef>" has 28 states
+		assert_eq!(MultiGramModel::count_text("abcdef", usize::MAX).stats.states, 28);
+		let count = MultiGramModel::count_text("abcdef", 10);
+		assert!(!count.complete);
+		assert_eq!(count.stats.states, 11);
+	}
+
+	#[test]
+	fn count_text_describes_the_lines() {
+		let count = MultiGramModel::count_text("ab\n\nabcdé\n", usize::MAX);
+		assert_eq!((count.lines, count.empty_lines, count.max_line_chars), (3, 1, 5));
 	}
 }

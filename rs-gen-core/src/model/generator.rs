@@ -12,7 +12,7 @@ use std::path::Path;
 /// - Load and manage multiple `MultiGramModel`s
 /// - Provide weighted model selection using `PredictionInput` probabilities
 /// - Generate sequences with randomness, seed control, and duplicate avoidance
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Generator {
 	models: HashMap<String, MultiGramModel>
 }
@@ -152,6 +152,32 @@ impl Generator {
 		let model = MultiGramModel::new(path)?;
 		self.models.insert(key, model);
 		Ok(())
+	}
+
+	/// Adds an already loaded model, under its name.
+	///
+	/// Loading a model takes time: load it with `MultiGramModel::new` first, so that
+	/// a generator shared between threads is locked only for the insertion.
+	///
+	/// # Errors
+	/// Returns an error if a model with the same name is already loaded.
+	pub fn insert_model(&mut self, model: MultiGramModel) -> Result<(), String> {
+		let name = model.get_name().to_owned();
+		if self.models.contains_key(&name) {
+			return Err(format!("Model already loaded: {}", name));
+		}
+		self.models.insert(name, model);
+		Ok(())
+	}
+
+	/// Removes a model and gives it back, or `None` if no model has this name.
+	pub fn remove_model(&mut self, name: &str) -> Option<MultiGramModel> {
+		self.models.remove(name)
+	}
+
+	/// Returns the model with this name, if loaded.
+	pub fn get_model(&self, name: &str) -> Option<&MultiGramModel> {
+		self.models.get(name)
 	}
 
 	/// Creates a new `PredictionInput` with default intensity for all models.
@@ -345,7 +371,7 @@ impl Generator {
 	/// - Calls `internal_predict`.
 	/// - Checks for duplicates against all loaded models up to `nb_try`.
 	/// - Returns the first non-duplicate or the last attempt if all fail.
-	pub fn predict(&mut self, prediction_input: &PredictionInput) -> Result<String, String> {
+	pub fn predict(&self, prediction_input: &PredictionInput) -> Result<String, String> {
 		if self.models.is_empty() {
 			return Err("No models available for prediction".to_owned());
 		}
@@ -407,7 +433,7 @@ mod tests {
 	}
 
 	// Runs `count` predictions in another thread, so that a generation that never ends fails the test
-	fn predict_within_deadline(mut generator: Generator, input: PredictionInput, count: usize) -> Vec<Result<String, String>> {
+	fn predict_within_deadline(generator: Generator, input: PredictionInput, count: usize) -> Vec<Result<String, String>> {
 		let (tx, rx) = mpsc::channel();
 		std::thread::spawn(move || {
 			let words: Vec<Result<String, String>> = (0..count).map(|_| generator.predict(&input)).collect();
@@ -500,6 +526,54 @@ mod tests {
 		for word in predict_within_deadline(generator, input, 3) {
 			assert_eq!(word, Ok("babc".to_owned()));
 		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	// Loads a model from a sub-directory, which `Generator::new` does not read
+	fn model_outside(dir: &Path, name: &str, lines: &str) -> MultiGramModel {
+		let other = dir.join("other");
+		std::fs::create_dir_all(&other).unwrap();
+		let path = other.join(format!("{}.dat", name));
+		std::fs::write(&path, lines).unwrap();
+		MultiGramModel::new(&path).unwrap()
+	}
+
+	#[test]
+	fn insert_model_adds_a_model_under_its_name() {
+		let (mut generator, dir) = generator_with("insert", &[("low", "abc\n")]);
+		generator.insert_model(model_outside(&dir, "up", "xyz\nyzx\n")).unwrap();
+		let mut names = generator.get_model_names();
+		names.sort();
+		assert_eq!(names, vec!["low", "up"]);
+		assert_eq!(generator.get_model("up").map(MultiGramModel::get_name), Some("up"));
+
+		let mut input = generator.make_prediction_input();
+		input.set_model_intensity("up", 1.0).unwrap();
+		for word in predict_within_deadline(generator, input, 20) {
+			let word = word.unwrap();
+			assert!(word.chars().all(|c| "xyz".contains(c)), "unexpected word {}", word);
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn insert_model_rejects_a_name_already_loaded() {
+		let (mut generator, dir) = generator_with("insert-twice", &[("low", "abc\n")]);
+		assert!(generator.insert_model(model_outside(&dir, "low", "xyz\n")).is_err());
+		// The loaded model is kept
+		assert!(generator.get_model("low").unwrap().check_if_exists("abc"));
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn remove_model_gives_the_model_back() {
+		let (mut generator, dir) = generator_with("remove", &[("low", "abc\n")]);
+		let model = generator.remove_model("low").unwrap();
+		assert_eq!(model.get_name(), "low");
+		assert!(generator.get_model_names().is_empty());
+		assert!(generator.remove_model("low").is_none());
+		let input = generator.make_prediction_input();
+		assert!(generator.predict(&input).is_err());
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 }

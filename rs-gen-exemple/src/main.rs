@@ -4,7 +4,7 @@ use rs_gen_core::model::prediction_input::StartSeed;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load all models from the "data" directory (.dat files)
     // Load automatically .bin is existing
-    let mut app: Generator = Generator::new("./data")?;
+    let app: Generator = Generator::new("./data")?;
 
     // Create a prediction input with default intensity values for all models
     let mut input = app.make_prediction_input();

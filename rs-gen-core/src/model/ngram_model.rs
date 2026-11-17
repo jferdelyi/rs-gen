@@ -134,6 +134,16 @@ impl NGramModel {
 	pub(crate) fn shrink_to_fit(&mut self) {
 		self.states.shrink_to_fit();
 	}
+
+	/// Returns the number of states and the UTF-8 bytes of their prefixes.
+	pub(crate) fn states_and_key_bytes(&self) -> (usize, usize) {
+		(self.states.len(), self.states.keys().map(|key| key.len()).sum())
+	}
+
+	/// Returns the number of transitions over every state.
+	pub(crate) fn transition_count(&self) -> usize {
+		self.states.values().map(State::transition_count).sum()
+	}
 }
 
 #[cfg(test)]

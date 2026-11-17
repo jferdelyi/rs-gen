@@ -49,6 +49,11 @@ impl State {
 		first.into_iter().chain(self.others.iter().flat_map(|others| others.iter()))
 	}
 
+	/// Returns the number of distinct transitions.
+	pub(crate) fn transition_count(&self) -> usize {
+		self.transitions().count()
+	}
+
 	/// Records an occurrence of a transition toward `next_char`.
 	///
 	/// If the transition already exists, its occurrence count is increased.
