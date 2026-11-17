@@ -1,17 +1,5 @@
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
-
-/// Reads a text file and returns all its lines as a `Vec<String>`.
-///
-/// - Reads the entire file into memory
-/// - Splits on `\n` / `\r\n`
-pub(crate) fn read_file<P: AsRef<Path>>(filename: P) -> io::Result<Vec<String>> {
-	let mut contents = String::new();
-	File::open(filename)?.read_to_string(&mut contents)?;
-	Ok(contents.lines().map(str::to_owned).collect())
-}
 
 /// Builds an output path based on an input path and a new extension.
 ///

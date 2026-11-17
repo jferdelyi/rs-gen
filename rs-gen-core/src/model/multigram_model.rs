@@ -1,10 +1,12 @@
 use super::ngram_model::NGramModel;
 use crate::hash::{FastHashMap, FastHashSet};
-use crate::io::{build_output_path, get_filename, read_file};
+use crate::io::{build_output_path, get_filename};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::Entry;
+use std::fs::File;
 use std::hash::{DefaultHasher, Hasher};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
-use std::sync::mpsc;
 use std::thread;
 
 pub(crate) const START_CHAR: char = '<';
@@ -14,6 +16,10 @@ pub(crate) const END_CHAR: char = '>';
 /// Bump its version whenever the serialized layout changes: a cache with another
 /// header is rebuilt from the text file instead of being misread.
 const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-4\n";
+
+/// Buffer that holds one string at a time while the cache is decoded: far longer than
+/// any prefix or sentence. A longer string makes the cache unreadable, hence rebuilt.
+const CACHE_SCRATCH_BYTES: usize = 64 * 1024;
 
 /// Size of a model, as built from its text file.
 ///
@@ -60,10 +66,17 @@ impl ModelStats {
 	/// Estimated peak memory while `MultiGramModel::new` builds the model
 	/// from a text file of `text_bytes` bytes, in bytes.
 	///
-	/// The partial models built in parallel are merged into the final one: on a real
-	/// model, the peak reached 2.3 times the memory of the loaded model.
+	/// Measured on real models: the peak reached 1.2 to 1.3 times the memory of the loaded
+	/// model on one processor, and 2.25 to 2.4 times on ten, where the partial models
+	/// built in parallel are merged into the final one.
 	pub fn estimated_build_bytes(&self, text_bytes: u64) -> u64 {
-		self.estimated_bytes() * 5 / 2 + text_bytes * 4
+		let model = if num_cpus::get() == 1 {
+			self.estimated_bytes() * 3 / 2
+		} else {
+			self.estimated_bytes() * 5 / 2
+		};
+		// The text, and one slice per line pointing into it
+		model + text_bytes * 4
 	}
 }
 
@@ -132,65 +145,96 @@ impl MultiGramModel {
 	///
 	/// # Notes
 	/// - Uses a binary cache (`postcard`) for faster loading if available.
-	/// - A cache without the current `CACHE_HEADER` is rebuilt from the text file.
+	/// - A cache without the current `CACHE_HEADER`, or a damaged one, is rebuilt from the text file.
 	pub fn new<P: AsRef<Path>>(filepath: P) -> Result<Self, Box<dyn std::error::Error>> {
 		let binary_data_path = build_output_path(&filepath, "bin")?;
-		let cache = if binary_data_path.exists() {
-			Some(std::fs::read(&binary_data_path)?)
-		} else {
-			None
-		};
-		let mut model: Self = match cache.as_deref().and_then(|bytes| bytes.strip_prefix(CACHE_HEADER)) {
-			Some(payload) => postcard::from_bytes(payload)?,
-			// No cache, or a cache written with another layout
-			None => Self::read_database_file(&filepath, binary_data_path)?,
+		let mut model = match Self::read_cache(&binary_data_path) {
+			Some(model) => model,
+			// No cache, a cache written with another layout, or a damaged one
+			None => {
+				let model = Self::read_database_file(&filepath)?;
+				model.write_cache(&binary_data_path)?;
+				model
+			}
 		};
 		model.name = get_filename(filepath)?;
 		Ok(model)
 	}
 
-	/// Reads a raw text file, splits lines into chunks, builds partial models in parallel,
-	/// merges them into a final `MultiGramModel`, and serializes it.
-	fn read_database_file<PF, PB>(
-		filename: PF,
-		binary_data_path: PB,
-	) -> Result<MultiGramModel, Box<dyn std::error::Error>>
-	where
-		PF: AsRef<Path>,
-		PB: AsRef<Path>,
-	{
-		let lines = read_file(&filename)?;
-		let cpus = num_cpus::get();
-		let factor = 8;
-		let chunks = cpus * factor;
-		// At least 1: `chunks(0)` panics on an empty file
-		let chunk_size = lines.len().div_ceil(chunks).max(1);
+	/// Reads the binary cache, streamed from the file: the cache is never held whole in memory.
+	///
+	/// Returns `None` if there is no cache, or if it was written with another layout or is damaged.
+	fn read_cache(path: &Path) -> Option<Self> {
+		let mut reader = BufReader::new(File::open(path).ok()?);
+		let mut header = [0u8; CACHE_HEADER.len()];
+		reader.read_exact(&mut header).ok()?;
+		if header != CACHE_HEADER {
+			return None;
+		}
+		// Holds one string at a time while it is decoded: a prefix, a sentence or the name
+		let mut scratch = vec![0u8; CACHE_SCRATCH_BYTES];
+		postcard::from_io((reader, scratch.as_mut_slice())).ok().map(|(model, _)| model)
+	}
 
-		let (tx, rx) = mpsc::channel();
-		for chunk in lines.chunks(chunk_size) {
-			let tx = tx.clone();
-			let chunk: Vec<String> = chunk.to_vec();
+	/// Writes the binary cache, streamed to a temporary file renamed once complete:
+	/// an interrupted write never leaves a damaged cache behind.
+	fn write_cache(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+		let temporary = path.with_extension("bin.tmp");
+		let mut writer = BufWriter::new(File::create(&temporary)?);
+		writer.write_all(CACHE_HEADER)?;
+		let mut writer = postcard::to_io(self, writer)?;
+		writer.flush()?;
+		drop(writer);
+		std::fs::rename(&temporary, path)?;
+		Ok(())
+	}
 
-			thread::spawn(move || {
-				let mut partial_model = MultiGramModel::default();
-				for sentence in chunk {
-					partial_model.add_sentence(&sentence);
+	/// Reads a raw text file and learns its lines, in parallel when the machine has
+	/// several processors: one partial model per processor, merged into the final model.
+	fn read_database_file<P: AsRef<Path>>(filename: P) -> Result<MultiGramModel, Box<dyn std::error::Error>> {
+		let text = std::fs::read_to_string(filename)?;
+		let lines: Vec<&str> = text.lines().collect();
+		// More partial models than processors would only repeat the prefixes they share
+		let threads = num_cpus::get().clamp(1, lines.len().max(1));
+
+		let mut final_model = if threads == 1 {
+			Self::learn(&lines)
+		} else {
+			let chunk_size = lines.len().div_ceil(threads);
+			thread::scope(|scope| {
+				let learners: Vec<_> = lines.chunks(chunk_size).map(|chunk| scope.spawn(move || Self::learn(chunk))).collect();
+				let mut partial_models = learners.into_iter().map(|learner| learner.join().expect("a learning thread panicked"));
+				let mut final_model = partial_models.next().unwrap_or_else(MultiGramModel::default);
+				for partial_model in partial_models {
+					final_model.merge_from(partial_model);
 				}
-				tx.send(partial_model).expect("Failed to send from thread");
-			});
-		}
-		drop(tx);
-
-		let mut final_model = MultiGramModel::default();
-		for partial_model in rx.iter() {
-			final_model.merge(&partial_model)?;
-		}
+				final_model
+			})
+		};
 		final_model.shrink_to_fit();
-
-		let bytes = postcard::to_extend(&final_model, CACHE_HEADER.to_vec())?;
-		std::fs::write(binary_data_path, bytes)?;
-
 		Ok(final_model)
+	}
+
+	/// Learns every line into a new model.
+	fn learn(lines: &[&str]) -> Self {
+		let mut model = Self::default();
+		for line in lines {
+			model.add_sentence(line);
+		}
+		model
+	}
+
+	/// Merges another model into this one, moving its states instead of copying them.
+	fn merge_from(&mut self, other: Self) {
+		for (n, model) in other.ngrams {
+			match self.ngrams.entry(n) {
+				Entry::Occupied(mut entry) => entry.get_mut().merge_from(model),
+				Entry::Vacant(entry) => {
+					entry.insert(model);
+				}
+			}
+		}
+		self.sentences.extend(other.sentences);
 	}
 
 	/// Releases the unused capacity of every n-gram model once learning is over.
@@ -588,6 +632,48 @@ mod tests {
 
 		assert_eq!(model.dump(), states_of_ab());
 		assert_ne!(std::fs::read(dir.join("words.bin")).unwrap(), stale_bytes);
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_damaged_cache_is_rebuilt() {
+		// A write cut short leaves the right header and half a model: the server must still start
+		let dir = test_dir("damaged-cache");
+		let dat = dir.join("words.dat");
+		std::fs::write(&dat, "ab\n").unwrap();
+		MultiGramModel::new(&dat).unwrap();
+		let bin = dir.join("words.bin");
+		let bytes = std::fs::read(&bin).unwrap();
+		std::fs::write(&bin, &bytes[..CACHE_HEADER.len() + 3]).unwrap();
+
+		let model = MultiGramModel::new(&dat).unwrap();
+
+		assert_eq!(model.dump(), states_of_ab());
+		assert_eq!(std::fs::read(&bin).unwrap(), bytes);
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn the_cache_is_written_without_leaving_a_temporary_file() {
+		let dir = test_dir("cache-temporary");
+		std::fs::write(dir.join("words.dat"), "ab\n").unwrap();
+		MultiGramModel::new(dir.join("words.dat")).unwrap();
+		let mut files: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+		files.sort();
+		assert_eq!(files, vec!["words.bin", "words.dat"]);
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_parallel_build_gives_the_model_learned_in_order() {
+		// Enough lines for one chunk per processor, sharing prefixes across the chunks
+		let text: String = (0..2000).map(|i| format!("w{}x{}\n", i % 37, i % 101)).collect();
+		let dir = test_dir("parallel-build");
+		std::fs::write(dir.join("words.dat"), &text).unwrap();
+		let built = MultiGramModel::read_database_file(dir.join("words.dat")).unwrap();
+		let learned = model_of(&text);
+		assert_eq!(built.dump(), learned.dump());
+		assert_eq!(built.stats(), learned.stats());
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 

@@ -2,6 +2,7 @@ use super::state::State;
 use crate::hash::FastHashMap;
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::Entry;
 
 /// Represents an n-gram model for sequences of characters.
 ///
@@ -128,6 +129,20 @@ impl NGramModel {
 		}
 
 		Ok(())
+	}
+
+	/// Merges another n-gram model of the same order into this one, moving its states
+	/// instead of copying them.
+	pub(crate) fn merge_from(&mut self, other: Self) {
+		debug_assert_eq!(self.n, other.n);
+		for (key, state) in other.states {
+			match self.states.entry(key) {
+				Entry::Occupied(mut entry) => entry.get_mut().merge(&state),
+				Entry::Vacant(entry) => {
+					entry.insert(state);
+				}
+			}
+		}
 	}
 
 	/// Releases the unused capacity of the states once learning is over.
