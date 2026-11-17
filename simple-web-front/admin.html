@@ -21,9 +21,14 @@
 
     <!-- Login -->
     <div id="login-card" class="card hidden">
-      <h2>Model administration</h2>
+      <div class="admin-title">
+        <h2>Model administration</h2>
+        <a href="index.html" class="action-btn fixed-btn link-btn" title="Back to the generator page">← Back</a>
+      </div>
       <form id="login-form" class="admin-row">
-        <input type="password" id="password" autocomplete="current-password" placeholder="Admin password" required>
+        <!-- Without a user name, password managers take the form for an account creation -->
+        <input type="text" name="username" autocomplete="username" value="admin" class="visually-hidden" tabindex="-1" aria-hidden="true">
+        <input type="password" id="password" name="password" autocomplete="current-password" placeholder="Admin password" required>
         <button type="submit" id="login-btn" class="primary-btn fixed-btn">Log in</button>
       </form>
       <p id="login-error" class="message message-error hidden"></p>
@@ -35,10 +40,19 @@
       <div class="card">
         <div class="admin-title">
           <h2>Model administration</h2>
-          <button id="logout-btn" class="action-btn fixed-btn" title="Close the admin session">Log out</button>
+          <div class="title-actions">
+            <a href="index.html" class="action-btn fixed-btn link-btn" title="Back to the generator page">← Back</a>
+            <button id="logout-btn" class="action-btn fixed-btn" title="Close the admin session">Log out</button>
+          </div>
         </div>
 
-        <h3>Server memory</h3>
+        <div class="admin-title">
+          <h3>Server memory</h3>
+          <div class="title-actions">
+            <span id="updated" class="hint"></span>
+            <button id="refresh-btn" class="action-btn small-btn" title="Read the memory and the models again">Refresh</button>
+          </div>
+        </div>
         <dl id="memory" class="figures"></dl>
       </div>
 
@@ -87,6 +101,27 @@
                   title="Available once the check of this file and this name passed">Add the model</button>
         </div>
         <div id="report" class="report hidden"></div>
+      </div>
+
+      <div class="card">
+        <h3>Change the password</h3>
+        <p class="hint">At least 12 characters. The other sessions are closed; this one stays open.</p>
+        <form id="password-form" class="admin-form password-form">
+          <!-- The same user name as the login: password managers update the saved password -->
+          <input type="text" name="username" autocomplete="username" value="admin" class="visually-hidden" tabindex="-1" aria-hidden="true">
+          <label for="current-password" class="label-title">Current password</label>
+          <input type="password" id="current-password" autocomplete="current-password" required>
+
+          <label for="new-password" class="label-title">New password</label>
+          <input type="password" id="new-password" autocomplete="new-password" minlength="12" required>
+
+          <label for="new-password-again" class="label-title">New password again</label>
+          <input type="password" id="new-password-again" autocomplete="new-password" minlength="12" required>
+        </form>
+        <p id="password-message" class="message hidden"></p>
+        <div class="button-row">
+          <button type="submit" form="password-form" id="password-btn" class="primary-btn fixed-btn">Change password</button>
+        </div>
       </div>
 
     </div>

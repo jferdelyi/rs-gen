@@ -3,7 +3,7 @@
 Static web pages to play with the generator and to manage its models. No build step and no dependency.
 
 - `index.html` lists the models of the API, lets you weight them and tune the parameters, and shows the generated words.
-- `admin.html` is the admin page: login, models with their size and the memory of the server, check and addition of a text file (forced, with a tick, when the model fits only by using swap), hide, show and delete.
+- `admin.html` is the admin page: login, models with their size and the memory of the server, check and addition of a text file (forced, with a tick, when the model fits only by using swap), hide, show and delete, change of the password; a Refresh button reads the memory and the models again, a Back button leads to the generator.
 
 ## Files
 

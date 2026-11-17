@@ -4,7 +4,7 @@
 //! needs an open session. The routes are disabled when no password hash is configured.
 
 use crate::AppState;
-use crate::auth::{SESSION_COOKIE, SESSION_LIFETIME};
+use crate::auth::{ChangeError, SESSION_COOKIE, SESSION_LIFETIME};
 use crate::catalog::{AdminError, ModelInfo};
 use crate::check::{self, CheckReport, MAX_LINE_CHARS, MAX_UPLOAD_BYTES, MEMORY_MARGIN_BYTES};
 use crate::system::MemoryInfo;
@@ -32,6 +32,7 @@ pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
 					.app_data(web::PayloadConfig::new(MAX_UPLOAD_BYTES))
 					.route("/logout", web::post().to(logout))
 					.route("/session", web::get().to(session))
+					.route("/password", web::post().to(change_password))
 					.route("/models", web::get().to(list_models))
 					.route("/models", web::post().to(add_model))
 					.route("/models/check", web::post().to(check_model))
@@ -178,6 +179,69 @@ async fn logout(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
 /// `GET /v1/admin/session`: tells that the session is open (the middleware refuses it otherwise).
 async fn session() -> HttpResponse {
 	HttpResponse::Ok().json(Done { ok: true })
+}
+
+/// Body of `POST /v1/admin/password`.
+#[derive(Deserialize)]
+struct PasswordBody {
+	/// The current password.
+	current: String,
+
+	/// The new password.
+	new: String,
+}
+
+/// `POST /v1/admin/password`: changes the admin password and saves its hash to the hash file.
+/// The current password is checked like a login: a wrong one counts as a failed attempt.
+/// The other sessions are closed; this one stays open.
+///
+/// # Returns
+/// - 200 OK: the password is changed
+/// - 400 Bad Request: the new password is refused (too short, too long, the current one)
+/// - 403 Forbidden: wrong current password
+/// - 429 Too Many Requests: too many failed attempts from this address, for one minute
+/// - 500 Internal Server Error: the new hash cannot be saved; the password is unchanged
+async fn change_password(req: HttpRequest, state: web::Data<AppState>, body: web::Json<PasswordBody>) -> HttpResponse {
+	let Some(auth) = state.auth.as_ref() else {
+		return error_response(StatusCode::SERVICE_UNAVAILABLE, "The admin is disabled");
+	};
+	let client = client_address(&req);
+	if let Err(wait) = auth.begin_login(&client) {
+		return HttpResponse::TooManyRequests()
+			.insert_header(("Retry-After", wait.to_string()))
+			.json(ErrorBody { error: &format!("Too many failed attempts: wait {} seconds", wait) });
+	}
+
+	let PasswordBody { current, new } = body.into_inner();
+	let changer = state.clone();
+	let result = web::block(move || changer.auth.as_ref().map(|auth| auth.change_password(&current, &new))).await;
+	let Ok(Some(result)) = result else {
+		return error_response(StatusCode::INTERNAL_SERVER_ERROR, "The change was interrupted");
+	};
+	// Past a wrong current password, the attempt was not a failed login: it is forgotten
+	match result {
+		Err(ChangeError::WrongPassword) => {
+			eprintln!("admin: failed password change from {}", client);
+			error_response(StatusCode::FORBIDDEN, "Wrong current password")
+		}
+		Ok(()) => {
+			auth.record_success(&client);
+			if let Some(cookie) = req.cookie(SESSION_COOKIE) {
+				auth.close_other_sessions(cookie.value());
+			}
+			eprintln!("admin: password changed from {}", client);
+			HttpResponse::Ok().json(Done { ok: true })
+		}
+		Err(ChangeError::Invalid(message)) => {
+			auth.record_success(&client);
+			error_response(StatusCode::BAD_REQUEST, &message)
+		}
+		Err(ChangeError::NotSaved(message)) => {
+			auth.record_success(&client);
+			eprintln!("admin: password change from {} not saved: {}", client, message);
+			error_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
+		}
+	}
 }
 
 /// Limits of the server, shown on the admin page.
@@ -446,27 +510,47 @@ mod tests {
 
 	// Creates a data directory dedicated to one test, and the state of a server reading it
 	fn state(test: &str, models: &[(&str, &str)], with_auth: bool) -> (web::Data<AppState>, PathBuf) {
-		state_with_memory(test, models, with_auth, MemoryInfo::read)
+		state_with(test, models, with_auth.then(auth), MemoryInfo::read)
 	}
 
 	// The same, with the memory figures given by `memory`
 	fn state_with_memory(test: &str, models: &[(&str, &str)], with_auth: bool, memory: fn() -> MemoryInfo) -> (web::Data<AppState>, PathBuf) {
+		state_with(test, models, with_auth.then(auth), memory)
+	}
+
+	// The same, with the given authentication and memory figures
+	fn state_with(test: &str, models: &[(&str, &str)], auth: Option<Auth>, memory: fn() -> MemoryInfo) -> (web::Data<AppState>, PathBuf) {
 		let dir = std::env::temp_dir().join(format!("rs-gen-admin-{}-{}", std::process::id(), test));
 		let _ = std::fs::remove_dir_all(&dir);
 		std::fs::create_dir_all(&dir).unwrap();
 		for (name, lines) in models {
 			std::fs::write(dir.join(format!("{}.dat", name)), lines).unwrap();
 		}
-		let auth = if with_auth { Some(auth()) } else { None };
 		let mut state = AppState::new(&dir, auth).unwrap();
 		state.memory = memory;
 		(web::Data::new(state), dir)
+	}
+
+	// A hash file of `PASSWORD` dedicated to one test, whose password can be changed
+	fn hash_file(test: &str) -> PathBuf {
+		let path = std::env::temp_dir().join(format!("rs-gen-admin-{}-{}-hash", std::process::id(), test));
+		std::fs::write(&path, hash_password(PASSWORD).unwrap()).unwrap();
+		path
+	}
+
+	const NEW_PASSWORD: &str = "a brand new password";
+
+	#[derive(Serialize)]
+	struct NewPassword<'a> {
+		current: &'a str,
+		new: &'a str,
 	}
 
 	// Every route behind the session, as (method, path)
 	const PROTECTED_ROUTES: &[(&str, &str)] = &[
 		("POST", "/v1/admin/logout"),
 		("GET", "/v1/admin/session"),
+		("POST", "/v1/admin/password"),
 		("GET", "/v1/admin/models"),
 		("POST", "/v1/admin/models?name=fruits"),
 		("POST", "/v1/admin/models/check?name=fruits"),
@@ -640,6 +724,78 @@ mod tests {
 		let response = test::call_service(&app, admin("DELETE", "/v1/admin/models/legumes").cookie(cookie.clone()).set_json(Confirm { confirm: "legumes" }).to_request()).await;
 		assert_eq!(response.status(), StatusCode::OK);
 		assert!(!dir.join("legumes.dat").exists() && !dir.join("legumes.bin").exists());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[actix_web::test]
+	async fn the_password_is_changed_and_saved() {
+		let path = hash_file("password");
+		let (state, dir) = state_with("password", &[("fruits", "pomme\n")], Some(Auth::from_file(&path).unwrap()), MemoryInfo::read);
+		let app = test::init_service(App::new().app_data(state).configure(crate::configure)).await;
+		let cookie = login_cookie!(&app);
+		let other = login_cookie!(&app);
+
+		let change = NewPassword { current: PASSWORD, new: NEW_PASSWORD };
+		let response = test::call_service(&app, admin("POST", "/v1/admin/password").cookie(cookie.clone()).set_json(change).to_request()).await;
+		assert_eq!(response.status(), StatusCode::OK);
+
+		// This session stays open, the other one is closed
+		let response = test::call_service(&app, admin("GET", "/v1/admin/session").cookie(cookie).to_request()).await;
+		assert_eq!(response.status(), StatusCode::OK);
+		let response = test::call_service(&app, admin("GET", "/v1/admin/session").cookie(other).to_request()).await;
+		assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+		// The old password is refused, the new one opens a session
+		let response = test::call_service(&app, admin("POST", "/v1/admin/login").set_json(Password { password: PASSWORD }).to_request()).await;
+		assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+		let response = test::call_service(&app, admin("POST", "/v1/admin/login").set_json(Password { password: NEW_PASSWORD }).to_request()).await;
+		assert_eq!(response.status(), StatusCode::OK);
+
+		// Saved: a restart keeps the new password
+		assert!(Auth::from_file(&path).unwrap().verify(NEW_PASSWORD));
+		let _ = std::fs::remove_file(&path);
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[actix_web::test]
+	async fn a_wrong_current_password_is_refused_then_slowed_down() {
+		let path = hash_file("password-wrong");
+		let before = std::fs::read_to_string(&path).unwrap();
+		let (state, dir) = state_with("password-wrong", &[("fruits", "pomme\n")], Some(Auth::from_file(&path).unwrap()), MemoryInfo::read);
+		let app = test::init_service(App::new().app_data(state).configure(crate::configure)).await;
+		let cookie = login_cookie!(&app);
+		let attempt = |current: &str| {
+			admin("POST", "/v1/admin/password")
+				.cookie(cookie.clone())
+				.insert_header(("x-real-ip", "203.0.113.9"))
+				.set_json(NewPassword { current, new: NEW_PASSWORD })
+				.to_request()
+		};
+		for _ in 0..5 {
+			let response = test::call_service(&app, attempt("wrong password")).await;
+			assert_eq!(response.status(), StatusCode::FORBIDDEN);
+		}
+		// Even the right password waits: a stolen session cannot guess the password
+		let response = test::call_service(&app, attempt(PASSWORD)).await;
+		assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+		assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+		let _ = std::fs::remove_file(&path);
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[actix_web::test]
+	async fn a_short_new_password_is_refused() {
+		let path = hash_file("password-short");
+		let before = std::fs::read_to_string(&path).unwrap();
+		let (state, dir) = state_with("password-short", &[("fruits", "pomme\n")], Some(Auth::from_file(&path).unwrap()), MemoryInfo::read);
+		let app = test::init_service(App::new().app_data(state).configure(crate::configure)).await;
+		let cookie = login_cookie!(&app);
+		let change = NewPassword { current: PASSWORD, new: "too short" };
+		let response = test::call_service(&app, admin("POST", "/v1/admin/password").cookie(cookie).set_json(change).to_request()).await;
+		assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+		assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+		let _ = login_cookie!(&app);
+		let _ = std::fs::remove_file(&path);
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 

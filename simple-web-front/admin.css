@@ -32,6 +32,22 @@
   gap: 12px;
 }
 
+.title-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* A link that looks like the buttons next to it */
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  text-decoration: none;
+  font-size: 13.333px;
+}
+
 /* =========================
    Buttons
 ========================= */
@@ -112,6 +128,24 @@ input[type="password"] {
 
 .admin-form .label-title {
   margin: 0;
+}
+
+.password-form {
+  grid-template-columns: 170px 1fr;
+}
+
+/* Read by password managers, not shown: out of the layout, not `display: none`.
+   `input.` outweighs the width that style.css gives to every text input. */
+input.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .hint {
@@ -229,6 +263,11 @@ ul.message {
   color: #7a4d00;
 }
 
+.message-success {
+  background: #ecfdf3;
+  color: #067647;
+}
+
 .report {
   display: flex;
   flex-direction: column;
@@ -267,6 +306,11 @@ ul.message {
   .admin-row,
   .button-row {
     flex-wrap: wrap;
+  }
+
+  /* The password takes its own line, the button the next one */
+  .admin-row input {
+    flex: 1 1 100%;
   }
 
   .fixed-btn {

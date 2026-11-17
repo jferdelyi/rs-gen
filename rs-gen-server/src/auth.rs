@@ -1,13 +1,15 @@
 //! Admin password and sessions.
 //!
 //! The server keeps only an Argon2id hash of the password, read from the file named by
-//! `RSGEN_ADMIN_HASH_FILE`. A login opens a session: a random token kept in memory and
-//! sent back in an `HttpOnly`, `Secure`, `SameSite=Strict` cookie.
+//! `RSGEN_ADMIN_HASH_FILE`; a change of password writes the new hash to the same file.
+//! A login opens a session: a random token kept in memory and sent back in an
+//! `HttpOnly`, `Secure`, `SameSite=Strict` cookie.
 
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use rand::Rng;
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -47,10 +49,26 @@ struct Attempts {
 	blocked_until: Option<Instant>,
 }
 
+/// Why a change of password failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ChangeError {
+	/// The current password is wrong.
+	WrongPassword,
+
+	/// The new password is refused (too short, too long, or the current one).
+	Invalid(String),
+
+	/// The new hash could not be saved: the password is unchanged.
+	NotSaved(String),
+}
+
 /// Password hash, open sessions and login attempts.
 pub(crate) struct Auth {
 	/// Argon2id hash of the password, as a PHC string (`$argon2id$v=19$...`).
-	password_hash: String,
+	password_hash: Mutex<String>,
+
+	/// File the hash was read from, where a new hash is saved. `None`: the password cannot change.
+	hash_file: Option<PathBuf>,
 
 	/// Open sessions: token and end of validity.
 	sessions: Mutex<HashMap<String, Instant>>,
@@ -60,10 +78,13 @@ pub(crate) struct Auth {
 
 	/// Held while a password is checked: one check at a time, each one taking about 19 MB.
 	checking: Mutex<()>,
+
+	/// Held during a change of password: one change at a time.
+	changing: Mutex<()>,
 }
 
 impl Auth {
-	/// Creates the authentication from a password hash.
+	/// Creates the authentication from a password hash. The password cannot be changed.
 	///
 	/// # Errors
 	/// Returns an error if the hash is not a valid PHC string.
@@ -71,11 +92,25 @@ impl Auth {
 		let password_hash = password_hash.trim();
 		PasswordHash::new(password_hash).map_err(|e| format!("Invalid admin password hash: {}", e))?;
 		Ok(Self {
-			password_hash: password_hash.to_owned(),
+			password_hash: Mutex::new(password_hash.to_owned()),
+			hash_file: None,
 			sessions: Mutex::new(HashMap::new()),
 			attempts: Mutex::new(HashMap::new()),
 			checking: Mutex::new(()),
+			changing: Mutex::new(()),
 		})
+	}
+
+	/// Reads the password hash from `path`, where a change of password saves the new hash.
+	///
+	/// # Errors
+	/// Returns an error if the file cannot be read or holds no valid hash.
+	pub(crate) fn from_file(path: &Path) -> Result<Self, String> {
+		let hash = std::fs::read_to_string(path)
+			.map_err(|e| format!("Cannot read {} ({}): {}", HASH_FILE_ENV, path.display(), e))?;
+		let mut auth = Self::new(&hash)?;
+		auth.hash_file = Some(path.to_owned());
+		Ok(auth)
 	}
 
 	/// Reads the password hash from the file named by `RSGEN_ADMIN_HASH_FILE`.
@@ -87,9 +122,7 @@ impl Auth {
 		let Some(path) = std::env::var_os(HASH_FILE_ENV) else {
 			return Ok(None);
 		};
-		let hash = std::fs::read_to_string(&path)
-			.map_err(|e| format!("Cannot read {} ({}): {}", HASH_FILE_ENV, path.to_string_lossy(), e))?;
-		Self::new(&hash).map(Some)
+		Self::from_file(Path::new(&path)).map(Some)
 	}
 
 	/// Checks a password against the hash. Slow on purpose (Argon2id): call it off the async workers.
@@ -97,8 +130,32 @@ impl Auth {
 		if password.len() > MAX_PASSWORD_BYTES {
 			return false;
 		}
+		let hash = lock(&self.password_hash).clone();
 		let _checking = lock(&self.checking);
-		Argon2::default().verify_password(password.as_bytes(), self.password_hash.as_str()).is_ok()
+		Argon2::default().verify_password(password.as_bytes(), hash.as_str()).is_ok()
+	}
+
+	/// Changes the password: checks the current one, hashes the new one, saves the hash to
+	/// the hash file, then uses it. If the hash cannot be saved, the password is unchanged.
+	/// Slow on purpose (two Argon2id runs): call it off the async workers.
+	///
+	/// # Errors
+	/// See `ChangeError`.
+	pub(crate) fn change_password(&self, current: &str, new: &str) -> Result<(), ChangeError> {
+		let _changing = lock(&self.changing);
+		if !self.verify(current) {
+			return Err(ChangeError::WrongPassword);
+		}
+		if new == current {
+			return Err(ChangeError::Invalid("The new password must differ from the current one".to_owned()));
+		}
+		let hash = hash_password(new).map_err(ChangeError::Invalid)?;
+		let Some(path) = &self.hash_file else {
+			return Err(ChangeError::NotSaved(format!("The hash is not read from a file: set {}", HASH_FILE_ENV)));
+		};
+		save_hash(path, &hash).map_err(|e| ChangeError::NotSaved(format!("Cannot save the new hash to {}: {}", path.display(), e)))?;
+		*lock(&self.password_hash) = hash;
+		Ok(())
 	}
 
 	/// Records a login attempt of `client`, before its password is checked.
@@ -153,6 +210,35 @@ impl Auth {
 	pub(crate) fn close_session(&self, token: &str) {
 		lock(&self.sessions).remove(token);
 	}
+
+	/// Closes every session but the one of `kept`: after a change of password,
+	/// whoever logged in with the old one is logged out.
+	pub(crate) fn close_other_sessions(&self, kept: &str) {
+		lock(&self.sessions).retain(|token, _| token == kept);
+	}
+}
+
+/// Writes `hash` to `path` through a temporary file in the same directory, then renames
+/// it: the file always holds a whole hash. Readable by its owner only, on Unix.
+fn save_hash(path: &Path, hash: &str) -> std::io::Result<()> {
+	let mut temporary = path.as_os_str().to_owned();
+	temporary.push(".new");
+	let temporary = PathBuf::from(temporary);
+	let written = (|| {
+		let mut options = std::fs::OpenOptions::new();
+		options.write(true).create(true).truncate(true);
+		#[cfg(unix)]
+		std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+		let mut file = options.open(&temporary)?;
+		file.write_all(hash.as_bytes())?;
+		file.write_all(b"\n")?;
+		file.sync_all()?;
+		std::fs::rename(&temporary, path)
+	})();
+	if written.is_err() {
+		let _ = std::fs::remove_file(&temporary);
+	}
+	written
 }
 
 /// Locks a table of `Auth`. A panic while it was locked cannot leave it half written
@@ -261,6 +347,74 @@ mod tests {
 		assert!((1..=LOCKOUT.as_secs()).contains(&wait), "{}", wait);
 		// Another address may still try
 		assert_eq!(auth.begin_login("5.6.7.8"), Ok(()));
+	}
+
+	// A hash file of "correct horse battery" dedicated to one test
+	fn hash_file(test: &str) -> PathBuf {
+		let path = std::env::temp_dir().join(format!("rs-gen-auth-{}-{}", std::process::id(), test));
+		std::fs::write(&path, format!("{}\n", hash_password("correct horse battery").unwrap())).unwrap();
+		path
+	}
+
+	#[test]
+	fn change_password_saves_the_new_hash() {
+		let path = hash_file("change");
+		let auth = Auth::from_file(&path).unwrap();
+		auth.change_password("correct horse battery", "a brand new password").unwrap();
+		assert!(auth.verify("a brand new password"));
+		assert!(!auth.verify("correct horse battery"));
+		// The file holds the new hash: a restart keeps the new password
+		assert!(Auth::from_file(&path).unwrap().verify("a brand new password"));
+		assert!(!PathBuf::from(format!("{}.new", path.display())).exists());
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::PermissionsExt;
+			assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+		}
+		let _ = std::fs::remove_file(&path);
+	}
+
+	#[test]
+	fn change_password_refuses_a_wrong_current_password_or_a_bad_new_one() {
+		let path = hash_file("refuse");
+		let before = std::fs::read_to_string(&path).unwrap();
+		let auth = Auth::from_file(&path).unwrap();
+		assert_eq!(auth.change_password("correct horse batterY", "a brand new password"), Err(ChangeError::WrongPassword));
+		assert!(matches!(auth.change_password("correct horse battery", "too short"), Err(ChangeError::Invalid(_))));
+		assert!(matches!(auth.change_password("correct horse battery", "correct horse battery"), Err(ChangeError::Invalid(_))));
+		assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+		assert!(auth.verify("correct horse battery"));
+		let _ = std::fs::remove_file(&path);
+	}
+
+	#[test]
+	fn a_hash_that_cannot_be_saved_keeps_the_password() {
+		// No hash file
+		let auth = auth();
+		assert!(matches!(auth.change_password("correct horse battery", "a brand new password"), Err(ChangeError::NotSaved(_))));
+		assert!(auth.verify("correct horse battery"));
+
+		// The temporary file cannot be written: a directory has its name
+		let path = hash_file("not-saved");
+		let before = std::fs::read_to_string(&path).unwrap();
+		let blocker = PathBuf::from(format!("{}.new", path.display()));
+		std::fs::create_dir_all(&blocker).unwrap();
+		let auth = Auth::from_file(&path).unwrap();
+		assert!(matches!(auth.change_password("correct horse battery", "a brand new password"), Err(ChangeError::NotSaved(_))));
+		assert!(auth.verify("correct horse battery"));
+		assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+		let _ = std::fs::remove_dir(&blocker);
+		let _ = std::fs::remove_file(&path);
+	}
+
+	#[test]
+	fn close_other_sessions_keeps_only_one() {
+		let auth = auth();
+		let kept = auth.open_session();
+		let other = auth.open_session();
+		auth.close_other_sessions(&kept);
+		assert!(auth.has_session(&kept));
+		assert!(!auth.has_session(&other));
 	}
 
 	#[test]

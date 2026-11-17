@@ -25,6 +25,8 @@ const loginError = document.getElementById("login-error");
 
 const adminPanel = document.getElementById("admin-panel");
 const logoutBtn = document.getElementById("logout-btn");
+const refreshBtn = document.getElementById("refresh-btn");
+const updated = document.getElementById("updated");
 const memory = document.getElementById("memory");
 const models = document.getElementById("models");
 const modelsError = document.getElementById("models-error");
@@ -44,6 +46,16 @@ const deleteConfirm = document.getElementById("delete-confirm");
 const deleteError = document.getElementById("delete-error");
 const deleteBtn = document.getElementById("delete-btn");
 const cancelDeleteBtn = document.getElementById("cancel-delete-btn");
+
+const passwordForm = document.getElementById("password-form");
+const currentPassword = document.getElementById("current-password");
+const newPassword = document.getElementById("new-password");
+const newPasswordAgain = document.getElementById("new-password-again");
+const passwordBtn = document.getElementById("password-btn");
+const passwordMessage = document.getElementById("password-message");
+
+// Shortest password accepted by the server
+const MIN_PASSWORD_CHARS = 12;
 
 let refreshTimer = null;
 // File and name of the last check without problem: "Add the model" sends exactly them.
@@ -255,6 +267,7 @@ async function loadModels() {
         showMessage(modelsError, "");
         renderMemory(data);
         renderModels(data.models);
+        updated.textContent = `Updated at ${new Date().toLocaleTimeString("en-GB")}`;
         if (data.models.some(model => model.status === "building")) {
             refreshTimer = setTimeout(loadModels, BUILD_REFRESH_MS);
         }
@@ -286,6 +299,15 @@ async function runAction(name, action, force = false) {
     }
     await loadModels();
 }
+
+refreshBtn.addEventListener("click", async () => {
+    refreshBtn.disabled = true;
+    try {
+        await loadModels();
+    } finally {
+        refreshBtn.disabled = false;
+    }
+});
 
 /* =============================
    Delete
@@ -483,6 +505,44 @@ addBtn.addEventListener("click", async () => {
     }
     updateAddButtons();
     await loadModels();
+});
+
+/* =============================
+   Password
+============================= */
+function showPasswordMessage(text, success = false) {
+    passwordMessage.classList.toggle("message-success", success);
+    passwordMessage.classList.toggle("message-error", !success);
+    showMessage(passwordMessage, text);
+}
+
+passwordForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    if ([...newPassword.value].length < MIN_PASSWORD_CHARS) {
+        showPasswordMessage(`The new password needs at least ${MIN_PASSWORD_CHARS} characters`);
+        return;
+    }
+    if (newPassword.value !== newPasswordAgain.value) {
+        showPasswordMessage("The two new passwords differ");
+        return;
+    }
+    passwordBtn.disabled = true;
+    showMessage(passwordMessage, "");
+    try {
+        const { ok, data } = await api("POST", "/password", { current: currentPassword.value, new: newPassword.value });
+        if (ok) {
+            passwordForm.reset();
+            showPasswordMessage("The password is changed. The other sessions are closed.", true);
+        } else {
+            showPasswordMessage(data.error);
+        }
+    } catch (error) {
+        if (!(error instanceof LoginRequired)) {
+            showPasswordMessage(`The server cannot be reached: ${error.message}`);
+        }
+    } finally {
+        passwordBtn.disabled = false;
+    }
 });
 
 /* =============================

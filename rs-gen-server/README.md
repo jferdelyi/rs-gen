@@ -7,8 +7,8 @@ REST API exposing the generator of `rs-gen-core`, built with actix-web. The publ
 | File | Role |
 |---|---|
 | `src/main.rs` | Loads the models of `./data` at startup, serves `GET /v1/generate` and `GET /v1/models` on `127.0.0.1:5000`, registers the admin routes. `rs-gen-server hash-password` prints the hash of a password instead. |
-| `src/admin.rs` | Admin routes under `/v1/admin`: login, logout, list, check, add, hide, show, delete. |
-| `src/auth.rs` | Password hash (Argon2id), sessions, limit of the login attempts. |
+| `src/admin.rs` | Admin routes under `/v1/admin`: login, logout, password change, list, check, add, hide, show, delete. |
+| `src/auth.rs` | Password hash (Argon2id) and its change, sessions, limit of the login attempts. |
 | `src/catalog.rs` | Model files of `data/` and their status (shown, hidden, building, failed): moves, deletions, background builds. |
 | `src/check.rs` | Checks a text file before it becomes a model: name, content, memory. |
 | `src/system.rs` | Memory of the process, of the machine and of the systemd service, read from `/proc` and the cgroup (Linux only). |
@@ -44,7 +44,9 @@ There is no default password: the admin routes answer `503` until a password has
 RSGEN_ADMIN_HASH_FILE=admin-hash ./rs-gen-server
 ```
 
-`read -rs` reads the password without showing it; going through `admin-hash.new` keeps the previous hash if the new password is refused. To change the password, write a new hash the same way and restart the server. A missing or invalid hash file disables the admin routes only: the public routes keep running.
+`read -rs` reads the password without showing it; going through `admin-hash.new` keeps the previous hash if the new password is refused. A missing or invalid hash file disables the admin routes only: the public routes keep running.
+
+Once logged in, the admin page changes the password: the server checks the current one, then writes the new hash to the same file (through `admin-hash.new`, readable by its owner only) and closes the other sessions. The file must therefore be writable by the service. If it is not, the change fails and the password stays the same. A forgotten password is replaced by writing a new hash with the command above, as the owner of the file, then restarting the server.
 
 ### Routes
 
@@ -55,6 +57,7 @@ Every admin request carries the header `X-Rs-Gen-Admin: 1`. Every route but `log
 | `POST /v1/admin/login` with `{"password": "..."}` | Opens a session, sent back as a cookie. | `200` |
 | `POST /v1/admin/logout` | Closes the session. | `200` |
 | `GET /v1/admin/session` | Tells that the session is open. | `200` |
+| `POST /v1/admin/password` with `{"current": "...", "new": "..."}` | Changes the password and saves its hash; closes the other sessions. A wrong current password counts as a failed login (`403`, then `429`); a new password refused: `400`; a hash that cannot be saved: `500`, password unchanged. | `200` |
 | `GET /v1/admin/models` | Every model with its status and size, the memory of the server (available in RAM and with swap), the limits. | `200` |
 | `POST /v1/admin/models/check?name=<name>`, the text file as body | Checks the file without saving anything. | `200` with the report |
 | `POST /v1/admin/models?name=<name>[&force=true]`, the text file as body | Checks the file again, then builds the model in the background; it is shown once it generates words. `force=true` accepts a model that fits only by using swap. | `202` with the report |
@@ -96,7 +99,7 @@ Without a session: `401`. Without the header: `403`. A failed check: `422` with 
 ### Reverse proxy and service
 
 - nginx: `proxy_set_header X-Real-IP $remote_addr;` and `client_max_body_size 32m;` on the admin routes (nginx refuses bodies above 1 MB by default).
-- systemd, with the hardening of the service: `ReadWritePaths=/opt/generator/data` (the data directory owned by the service user), `LoadCredential=admin-hash:/etc/generator/admin-hash` and `Environment=RSGEN_ADMIN_HASH_FILE=%d/admin-hash`, and a `MemoryMax` so that a build that goes beyond the estimate stops the generator only.
+- systemd, with the hardening of the service: `ReadWritePaths=/opt/generator/data` (the data directory owned by the service user), `StateDirectory=generator` with `StateDirectoryMode=0700` and `Environment=RSGEN_ADMIN_HASH_FILE=/var/lib/generator/admin-hash` (a hash file the service owns, so that the page can change the password), and a `MemoryMax` so that a build that goes beyond the estimate stops the generator only.
 
 ## Tests
 
@@ -104,7 +107,7 @@ Without a session: `401`. Without the header: `403`. A failed check: `422` with 
 cargo test -p rs-gen-server
 ```
 
-The tests call the routes through actix-web, on temporary data directories: each admin route without a session or without the header, login, wrong passwords and their limit, the life of a model (check, add, hide, show, delete), names made of paths, and with fixed memory figures the forced addition and display of a model that fits only by using swap, and the refusal of one that does not fit even with swap.
+The tests call the routes through actix-web, on temporary data directories: each admin route without a session or without the header, login, wrong passwords and their limit, the life of a model (check, add, hide, show, delete), names made of paths, the change of password (saved, other sessions closed, wrong current password counted, short new password refused), and with fixed memory figures the forced addition and display of a model that fits only by using swap, and the refusal of one that does not fit even with swap.
 
 ## Building for a Linux server
 
