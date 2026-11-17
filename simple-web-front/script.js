@@ -249,14 +249,29 @@ function typeWriter(text) {
 /* =============================
    Generate
 ============================= */
+// Answer of the server when the request names a model it does not serve
+const UNKNOWN_MODEL = /^Model .+ not found$/;
+
+// Reads the list of models again: the admin may have hidden, shown or added one
+async function reloadModels() {
+    await loadModels();
+    updateUrl();
+}
+
 async function generate() {
     if (!currentUrl) return;
 
     generateBtn.disabled = true;
 
     try {
-        const response = await fetch(currentUrl);
-        const result = await response.text();
+        let response = await fetch(currentUrl);
+        let result = await response.text();
+        // A model was hidden or deleted since the page loaded: retry once with the new list
+        if (response.status === 400 && UNKNOWN_MODEL.test(result.trim())) {
+            await reloadModels();
+            response = await fetch(currentUrl);
+            result = await response.text();
+        }
         typeWriter(result);
     } catch (err) {
         typeWriter(`Error: ${err.message}`);
@@ -269,6 +284,13 @@ async function generate() {
    Event Listeners
 ============================= */
 generateBtn.addEventListener("click", generate);
+
+// Coming back to the page shows the models the server serves now
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !isInitializing) {
+        reloadModels();
+    }
+});
 
 [randomness, maxN, retryCount, progressiveRandomness, customSeed, randomSeed]
     .forEach(el => el.addEventListener("input", saveSettings));
