@@ -26,10 +26,13 @@ Training files of the generator. Each `<name>.dat` file becomes a model called `
 
 ## Binary cache
 
-The first load of `<name>.dat` learns the model and writes `<name>.bin` next to it; the next loads read the `.bin` file. The cache starts with a version header, so a cache written by another version of `rs-gen-core` is rebuilt. `.bin` files are not versioned (`.gitignore`).
+The first load of `<name>.dat` learns the model and writes `<name>.bin` next to it; the next loads read the `.bin` file. The cache starts with a version header, so a cache written by another version of `rs-gen-core`, or a damaged one, is rebuilt. `.bin` files are not versioned (`.gitignore`).
 
-Learning needs much more memory than loading: `english.dat` peaks around 1.5 GB while it is learned, against about 650 MB to load the eleven models from their cache. On a small server, generate the `.bin` files on another machine and copy them next to the `.dat` files.
+Learning needs more memory than loading. Measured on an Apple M1 Pro: `english.dat` peaks at 924 MB while it is learned on ten processors, against 410 MB to load it from its cache; on one processor, learning peaks at about 1.3 times the loaded model. On a small server, the admin page checks the memory before learning a new model.
 
 ## Adding a model
 
-Add `<name>.dat` to this directory and restart the server: the model appears in `GET /v1/models` and can be weighted with `intensity=<name>:<value>`.
+- With the admin page (`simple-web-front/admin.html`): the file is checked (format, memory), learned in the background, then shown, without restarting the server.
+- By hand: add `<name>.dat` to this directory and restart the server.
+
+The model then appears in `GET /v1/models` and can be weighted with `intensity=<name>:<value>`. On the server, the admin page keeps the hidden models in `hidden/` and builds the new ones in `building/`: the server reads only the files directly in this directory.

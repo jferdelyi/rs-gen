@@ -99,8 +99,8 @@ To prevent generating words already present in the training database, the genera
 
 Generation can be initialized using a seed:
 
-* `custom:<string>` — start from an explicit prefix
-* `random:<n>` — start from a random key of the N-gram model of order `n`
+* `custom:<string>`: start from an explicit prefix
+* `random:<n>`: start from a random key of the N-gram model of order `n`
   * `n = 0` picks the order randomly
 
 ### Generator API
@@ -117,7 +117,7 @@ The `Generator` is the high-level entry point. While raw N-gram and MultiGram mo
 
 ### Binary cache
 
-Each `<name>.dat` model is learned once, then cached as `<name>.bin` next to it. The cache starts with a version header: a cache written by another version of the crate is rebuilt from its `.dat` file.
+Each `<name>.dat` model is learned once, then cached as `<name>.bin` next to it. The cache starts with a version header: a cache written by another version of the crate, or a damaged one, is rebuilt from its `.dat` file. The cache is read and written as a stream, never held whole in memory.
 
 ---
 
@@ -146,8 +146,8 @@ http://127.0.0.1:5000/v1/generate?max_n=0&nb_try=100&randomness=0.1&reduce_rando
 | Parameter       | Description                                                                              |
 | --------------- | ---------------------------------------------------------------------------------------- |
 | `max_n`         | Maximum N-gram size (`0` = unlimited)                                                    |
-| `nb_try`        | Maximum attempts to avoid generating a word already present in the database              |
-| `randomness`    | Randomness factor (`0.0` – `1.0`) controlling random N-gram selection                    |
+| `nb_try`        | Maximum attempts to avoid generating a word already present in the database (at most `1000`) |
+| `randomness`    | Randomness factor (`0.0` to `1.0`) controlling random N-gram selection                   |
 | `reduce_random` | Apply randomness again during key reduction (highly exploratory results)                 |
 | `seed`          | `custom:<string>` or `random:<n>` (N-gram order of the starting key, `0` = random)      |
 | `intensity`     | Model weights formatted as `<database>:<value>`; values are normalized before prediction |
@@ -156,11 +156,17 @@ http://127.0.0.1:5000/v1/generate?max_n=0&nb_try=100&randomness=0.1&reduce_rando
 
 #### `GET /v1/models`
 
-Returns the list of available models loaded from the `data/` directory.
+Returns the names of the shown models, one per line. Hidden models (see the admin routes) are not loaded and not listed.
 
 ```
 http://127.0.0.1:5000/v1/models
 ```
+
+---
+
+#### Admin routes (`/v1/admin/...`)
+
+Password-protected routes to manage the models while the server runs: list them with their size and the memory of the server, check a text file, add it as a new model, hide a model (unloaded, files kept), show it again, delete it. They stay disabled until an admin password hash is configured. See [rs-gen-server/README.md](rs-gen-server/README.md#admin) for the setup and the routes.
 
 ---
 
@@ -174,5 +180,7 @@ Features:
 * tuning of generation parameters
 * live API testing
 * visualization of generated words
+
+`admin.html` is the admin page: login, list of the models, check and addition of a text file, hide, show and delete.
 
 The UI is deliberately minimal and may evolve over time.

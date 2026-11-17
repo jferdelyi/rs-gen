@@ -7,12 +7,12 @@ Library holding all the generation logic: learning character-level n-gram models
 | File | Role |
 |---|---|
 | `src/lib.rs` | Crate root: exposes `model`, keeps `io` and `hash` internal. |
-| `src/io.rs` | File helpers: read the lines of a file, list the `.dat` files of a directory, build the `.bin` path. |
+| `src/io.rs` | File helpers: list the `.dat` files of a directory, build the `.bin` path, name a model after its file. |
 | `src/hash.rs` | Fast hasher (multiply-rotate) for the internal tables, faster than SipHash on short keys. |
 | `src/model/mod.rs` | Declares the model modules. |
-| `src/model/generator.rs` | `Generator`: loads every `.dat` of a directory, draws the models by weight, generates a word, retries when the word already exists. |
+| `src/model/generator.rs` | `Generator`: loads every `.dat` of a directory, adds or removes a model while it is used, draws the models by weight, generates a word, retries when the word already exists. |
 | `src/model/prediction_input.rs` | `PredictionInput` and `StartSeed`: generation parameters and model weights. |
-| `src/model/multigram_model.rs` | `MultiGramModel`: one model per training file, made of one `NGramModel` per order, its sentences, and its binary cache. |
+| `src/model/multigram_model.rs` | `MultiGramModel`: one model per training file, made of one `NGramModel` per order, its sentences, and its binary cache. `ModelStats` gives its size and estimated memory; `count_text` gives the same statistics from a text, without learning it. |
 | `src/model/ngram_model.rs` | `NGramModel`: the states of one order n, keyed by their prefix of n - 1 characters. |
 | `src/model/state.rs` | `State`: the next characters seen after a prefix and their counts, and the weighted draw of the next one. |
 
@@ -20,7 +20,7 @@ Library holding all the generation logic: learning character-level n-gram models
 
 - `serde` and `postcard`: serialization of the binary cache.
 - `rand`: random draws (models, n, next character, seeds).
-- `num_cpus`: number of threads used to learn a model.
+- `num_cpus`: number of processors, hence of partial models learned in parallel.
 
 ## Memory
 
@@ -32,10 +32,16 @@ A model keeps a state for every prefix of every order of every word, so the larg
 
 Measured on an Apple M1 Pro with the eleven models of `data/`: about 650 MB once loaded, and about 0.04 ms per generated word with every model weighted (`nb_try=100`).
 
+Learning and loading:
+
+- The binary cache is read and written as a stream: loading `english` peaks at 410 MB instead of 473 MB when the cache was read whole.
+- A model is learned as one partial model per processor, merged by moving the states. On ten processors, learning `english` peaks at 924 MB (2.25 times the loaded model); on one processor, the lines are learned straight into the model, about 1.2 to 1.3 times.
+- `ModelStats::estimated_bytes` estimates the memory of a loaded model from its states and sentences. It is calibrated on a Linux server (musl allocator), where the eleven models took 581 MB, about 84 bytes per state besides the prefixes; macOS takes about 20 % more.
+
 ## Tests
 
 ```
 cargo test -p rs-gen-core
 ```
 
-The tests live next to the code (`#[cfg(test)]` modules). Some write temporary training files in the system temporary directory.
+The tests live next to the code (`#[cfg(test)]` modules). Some write temporary training files in the system temporary directory. `count_text` is checked against the learned model on texts chosen for their edge cases (case, accents, markers, empty lines, characters that lowercase to two), and gave the same statistics as the learned model on 15 real training files.
