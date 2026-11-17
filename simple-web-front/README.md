@@ -15,7 +15,8 @@ Static web pages to play with the generator and to manage its models. No build s
 | `admin.html` | The admin page. |
 | `admin.js` | Calls the admin routes (`/v1/admin/...`) of `rs-gen-server`. |
 | `admin.css` | What the admin page adds to `style.css`: table, figures, messages, delete button. |
-| `icon-192.png` | Icon of the pages. |
+| `icon.svg`, `icon-32.png`, `icon-192.png` | Icon of the pages, in the browser tab and on Android. |
+| `apple-touch-icon.png` | Icon of the generator page on the iOS home screen: square, iOS rounds the corners itself. |
 | `github-icon.svg`, `reload.svg` | Icons of the links and buttons. |
 
 ## API address

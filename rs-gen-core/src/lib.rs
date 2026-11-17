@@ -8,6 +8,10 @@
 //!
 //! Only the high-level API is exposed publicly. Low-level components
 //! are kept internal to ensure consistency and prevent misuse.
+#![doc(
+	html_logo_url = "https://raw.githubusercontent.com/jferdelyi/rs-gen/main/assets/rs-gen-icon.svg",
+	html_favicon_url = "https://raw.githubusercontent.com/jferdelyi/rs-gen/main/assets/rs-gen-icon.svg"
+)]
 
 /// Core n-gram models and generation logic.
 ///

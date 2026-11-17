@@ -1,4 +1,4 @@
-<p align="center"><img src="https://github.com/user-attachments/assets/3ba9b48f-bc0c-4cee-9a30-1ba3ccbabc00" width="192"></p>
+<p align="center"><img src="assets/rs-gen-icon.svg" alt="rs-gen" width="192"></p>
 
 
 
@@ -15,6 +15,7 @@
 
 ```
 rs-gen
+├── assets            # Icon and social preview image
 ├── data              # Training files of the models (.dat)
 ├── rs-gen-core       # Core N-gram and MultiGram generation logic
 ├── rs-gen-server     # REST API server (actix-web)
@@ -22,7 +23,7 @@ rs-gen
 └── simple-web-front  # Lightweight web-based UI
 ```
 
-Each crate has a single responsibility and can be used independently. Each directory has its own README describing its files: [data](data/README.md), [rs-gen-core](rs-gen-core/README.md), [rs-gen-server](rs-gen-server/README.md), [rs-gen-exemple](rs-gen-exemple/README.md), [simple-web-front](simple-web-front/README.md).
+Each crate has a single responsibility and can be used independently. Each directory has its own README describing its files: [assets](assets/README.md), [data](data/README.md), [rs-gen-core](rs-gen-core/README.md), [rs-gen-server](rs-gen-server/README.md), [rs-gen-exemple](rs-gen-exemple/README.md), [simple-web-front](simple-web-front/README.md).
 
 ### Development
 
