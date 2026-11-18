@@ -159,13 +159,14 @@ input.visually-hidden {
 ========================= */
 .figures {
   display: grid;
-  grid-template-columns: max-content max-content;
+  grid-template-columns: minmax(0, max-content) max-content;
   gap: 6px 24px;
   margin: 0;
 }
 
 .figures dt {
   color: #57606a;
+  overflow-wrap: anywhere;
 }
 
 .figures dd {
@@ -178,40 +179,74 @@ input.visually-hidden {
 /* =========================
    Models table
 ========================= */
-.table-scroll {
-  overflow-x: auto;
+/* One card per model, as many per row as the width allows */
+.model-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
 }
 
-table {
-  width: 100%;
-  border-collapse: collapse;
+.model-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #eaeef2;
+  border-radius: 14px;
+}
+
+.model-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.model-card-head h4 {
+  margin: 0;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.model-card-head .status {
   font-size: 14px;
+  text-align: right;
 }
 
-th,
-td {
-  padding: 8px 10px;
-  border-bottom: 1px solid #eaeef2;
-  text-align: left;
-  white-space: nowrap;
+/* The figures two by two, the title above the value */
+.model-figures {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+  margin: 0;
 }
 
-th {
+.model-figures div {
+  min-width: 0;
+}
+
+.model-figures dt {
   color: #57606a;
-  font-weight: 500;
+  font-size: 12px;
 }
 
-.number {
-  text-align: right;
+.model-figures dd {
+  margin: 0;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
-.actions {
-  text-align: right;
+.model-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-td.actions button + button {
-  margin-left: 6px;
+/* Every button at its own width: style.css makes the action buttons fill their row */
+.model-card-actions button {
+  flex: 0 0 auto;
 }
 
 .model-name {
@@ -334,62 +369,5 @@ ul.message {
 
   .fixed-btn {
     flex: 1 1 140px;
-  }
-}
-
-/* =========================
-   Models as cards on a phone: no sideways scroll
-========================= */
-@media (max-width: 700px) {
-  #models-table thead {
-    display: none;
-  }
-
-  #models-table,
-  #models-table tbody {
-    display: block;
-  }
-
-  /* Name and status on top, the figures two by two, the buttons at the bottom */
-  #models-table tr {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px 12px;
-    padding: 12px 0;
-    border-bottom: 1px solid #eaeef2;
-  }
-
-  #models-table td {
-    padding: 0;
-    border: none;
-    white-space: normal;
-    text-align: left;
-  }
-
-  #models-table td[data-label]::before {
-    content: attr(data-label);
-    display: block;
-    color: #57606a;
-    font-size: 12px;
-  }
-
-  #models-table td.model-name,
-  #models-table td.status {
-    font-size: 15px;
-  }
-
-  #models-table td.model-name::before,
-  #models-table td.status::before,
-  #models-table td.actions::before {
-    content: none;
-  }
-
-  #models-table td.status {
-    text-align: right;
-  }
-
-  #models-table td.actions {
-    grid-column: 1 / -1;
-    text-align: left;
   }
 }

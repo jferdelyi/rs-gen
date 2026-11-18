@@ -61,6 +61,8 @@ let refreshTimer = null;
 // File and name of the last check without problem: "Add the model" sends exactly them.
 // `risky` when the model fits only by using swap: the addition then needs the force box.
 let checked = null;
+// Model added last: a short note replaces its report until it is shown or has failed
+let addedModel = null;
 // Model waiting for the delete confirmation
 let modelToDelete = null;
 
@@ -234,49 +236,76 @@ function actionButton(label, title, onClick, className = "action-btn") {
     return button;
 }
 
-// Column titles, shown above each figure when the table becomes cards on a phone
-const COLUMN_LABELS = [...document.querySelectorAll("#models-table thead th")].map(th => th.textContent);
+// Creates an element with a class and a text
+function element(tag, className, text = "") {
+    const node = document.createElement(tag);
+    node.className = className;
+    node.textContent = text;
+    return node;
+}
+
+// One card per model: name and status, its figures two by two, its actions
+function modelCard(model) {
+    const card = element("article", "model-card");
+
+    const head = element("div", "model-card-head");
+    const status = element("span", `status status-${model.status}`, statusLabel(model));
+    if (model.error) {
+        status.title = model.error;
+        status.classList.add("status-error");
+    }
+    head.append(element("h4", "model-name", model.name), status);
+
+    const figures = element("dl", "model-figures");
+    for (const [label, value] of [
+        ["Words", formatNumber(model.stats?.sentences)],
+        ["States", formatNumber(model.stats?.states)],
+        ["Max n", formatNumber(model.stats?.max_n)],
+        ["Memory (estimate)", model.estimated_bytes === null ? "not loaded" : formatBytes(model.estimated_bytes)],
+        ["Text file", formatBytes(model.dat_bytes)],
+        ["Cache", formatBytes(model.bin_bytes)],
+        ["Modified", formatDate(model.modified)]
+    ]) {
+        const pair = document.createElement("div");
+        pair.append(element("dt", "", label), element("dd", "", value));
+        figures.appendChild(pair);
+    }
+    card.append(head, figures);
+
+    const actions = element("div", "model-card-actions");
+    if (model.status === "shown") {
+        actions.appendChild(actionButton("Hide", "Remove from the generator and free its memory; the files are kept", () => runAction(model.name, "hide")));
+    } else if (model.status === "hidden") {
+        actions.appendChild(actionButton("Show", "Load it again into the generator, if the memory allows it", () => runAction(model.name, "show")));
+    }
+    if (!ON_THE_WAY.has(model.status)) {
+        actions.appendChild(actionButton("Delete", "Delete its files for good", () => openDelete(model.name), "danger-btn"));
+    }
+    if (actions.children.length > 0) {
+        card.appendChild(actions);
+    }
+    return card;
+}
+
+// Removes the note of the model added last once it is no longer on its way
+function forgetAddedModel(list) {
+    if (addedModel === null) {
+        return;
+    }
+    const added = list.find(model => model.name === addedModel);
+    if (!added || !ON_THE_WAY.has(added.status)) {
+        report.replaceChildren();
+        report.classList.add("hidden");
+        addedModel = null;
+    }
+}
 
 function renderModels(list) {
-    models.replaceChildren(...list.map(model => {
-        const row = document.createElement("tr");
-        const cell = (text, className = "") => {
-            const td = document.createElement("td");
-            td.textContent = text;
-            if (className) {
-                td.className = className;
-            }
-            td.dataset.label = COLUMN_LABELS[row.children.length] || "";
-            row.appendChild(td);
-            return td;
-        };
-
-        cell(model.name, "model-name");
-        const status = cell(statusLabel(model));
-        status.classList.add("status", `status-${model.status}`);
-        if (model.error) {
-            status.title = model.error;
-            status.classList.add("status-error");
-        }
-        cell(formatNumber(model.stats?.sentences), "number");
-        cell(formatNumber(model.stats?.states), "number");
-        cell(formatNumber(model.stats?.max_n), "number");
-        cell(model.estimated_bytes === null ? "not loaded" : formatBytes(model.estimated_bytes), "number");
-        cell(formatBytes(model.dat_bytes), "number");
-        cell(formatBytes(model.bin_bytes), "number");
-        cell(formatDate(model.modified));
-
-        const actions = cell("", "actions");
-        if (model.status === "shown") {
-            actions.appendChild(actionButton("Hide", "Remove from the generator and free its memory; the files are kept", () => runAction(model.name, "hide")));
-        } else if (model.status === "hidden") {
-            actions.appendChild(actionButton("Show", "Load it again into the generator, if the memory allows it", () => runAction(model.name, "show")));
-        }
-        if (!ON_THE_WAY.has(model.status)) {
-            actions.appendChild(actionButton("Delete", "Delete its files for good", () => openDelete(model.name), "danger-btn"));
-        }
-        return row;
-    }));
+    if (list.length === 0) {
+        models.replaceChildren(element("p", "hint", "No model yet: add one below."));
+        return;
+    }
+    models.replaceChildren(...list.map(modelCard));
 }
 
 async function loadModels() {
@@ -290,6 +319,7 @@ async function loadModels() {
         showMessage(modelsError, "");
         renderMemory(data);
         renderModels(data.models);
+        forgetAddedModel(data.models);
         updated.textContent = `Updated at ${new Date().toLocaleTimeString("en-GB")}`;
         if (data.models.some(model => ON_THE_WAY.has(model.status))) {
             refreshTimer = setTimeout(loadModels, BUSY_REFRESH_MS);
@@ -478,6 +508,7 @@ checkBtn.addEventListener("click", async () => {
     checkBtn.disabled = true;
     addBtn.disabled = true;
     forgetCheck();
+    addedModel = null;
     try {
         const { status, data } = await api("POST", `/models/check?name=${encodeURIComponent(name)}`, file);
         if (status === 200) {
@@ -509,9 +540,12 @@ addBtn.addEventListener("click", async () => {
         const query = `name=${encodeURIComponent(name)}${force ? "&force=true" : ""}`;
         const { status, data } = await api("POST", `/models?${query}`, file);
         if (status === 202) {
-            renderReport(data, force
-                ? "The build started, using swap: the model becomes shown once it generates words"
-                : "The build started: the model becomes shown once it generates words");
+            addedModel = name;
+            const note = force
+                ? `'${name}' is being added, using swap: its status is in the list of the models.`
+                : `'${name}' is being added: its status is in the list of the models.`;
+            report.replaceChildren(element("p", "hint", note));
+            report.classList.remove("hidden");
             modelFile.value = "";
             modelName.value = "";
             forgetCheck();
