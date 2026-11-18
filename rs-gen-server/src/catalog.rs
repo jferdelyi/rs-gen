@@ -484,43 +484,6 @@ impl Catalog {
 		})
 	}
 
-	/// Renames a shown or hidden model: its files, its size and the reason of a failed show
-	/// follow it, and a shown model is generated under its new name at once.
-	///
-	/// # Errors
-	/// Returns a conflict if the model is on its way or failed, or if the new name is taken.
-	pub(crate) fn rename(&self, generator: &RwLock<Generator>, name: &str, new_name: &str) -> Result<(), AdminError> {
-		let jobs = lock(&self.jobs);
-		if jobs.contains_key(name) {
-			return Err(AdminError::Conflict(format!("The model '{}' is being added or shown, or its addition failed: it cannot be renamed", name)));
-		}
-		if jobs.contains_key(new_name) || self.on_disk(new_name) {
-			return Err(AdminError::Conflict(format!("A model named '{}' already exists", new_name)));
-		}
-		if Self::dat(&self.data_dir, name).exists() {
-			move_files(&self.data_dir, name, &self.data_dir, new_name)?;
-			let renamed = write(generator).and_then(|mut generator| generator.rename_model(name, new_name).map_err(AdminError::Internal));
-			if let Err(error) = renamed {
-				let _ = move_files(&self.data_dir, new_name, &self.data_dir, name);
-				return Err(error);
-			}
-		} else if Self::dat(&self.hidden_dir(), name).exists() {
-			move_files(&self.hidden_dir(), name, &self.hidden_dir(), new_name)?;
-		} else {
-			return Err(AdminError::NotFound(format!("No model named '{}'", name)));
-		}
-		let mut known = lock(&self.known);
-		if let Some(size) = known.remove(name) {
-			known.insert(new_name.to_owned(), size);
-		}
-		drop(known);
-		let mut errors = lock(&self.errors);
-		if let Some(error) = errors.remove(name) {
-			errors.insert(new_name.to_owned(), error);
-		}
-		Ok(())
-	}
-
 	/// Deletes a model for good, shown, hidden or failed: its files are removed.
 	pub(crate) fn delete(&self, generator: &RwLock<Generator>, name: &str) -> Result<(), AdminError> {
 		let mut jobs = lock(&self.jobs);
@@ -652,25 +615,19 @@ fn dat_names(dir: &Path) -> Result<Vec<String>, AdminError> {
 }
 
 /// Moves the text file and the binary cache of a model from one directory to another.
+/// If the cache cannot follow, the text file goes back, so that the model is never split.
+/// The size file follows if it can: without it, the size is only unknown until the next load.
 fn move_model(from: &Path, to: &Path, name: &str) -> Result<(), AdminError> {
-	move_files(from, name, to, name)
-}
-
-/// Moves the files of the model `name` of `from` to the model `new_name` of `to`: a move,
-/// a renaming, or both. If the cache cannot follow, the text file goes back, so that the
-/// model is never split. The size file follows if it can: without it, the size is only
-/// unknown until the next load.
-fn move_files(from: &Path, name: &str, to: &Path, new_name: &str) -> Result<(), AdminError> {
-	std::fs::rename(Catalog::dat(from, name), Catalog::dat(to, new_name))?;
+	std::fs::rename(Catalog::dat(from, name), Catalog::dat(to, name))?;
 	let bin = Catalog::bin(from, name);
 	if bin.exists()
-		&& let Err(e) = std::fs::rename(&bin, Catalog::bin(to, new_name))
+		&& let Err(e) = std::fs::rename(&bin, Catalog::bin(to, name))
 	{
-		std::fs::rename(Catalog::dat(to, new_name), Catalog::dat(from, name))?;
+		std::fs::rename(Catalog::dat(to, name), Catalog::dat(from, name))?;
 		return Err(e.into());
 	}
 	let stats = Catalog::stats(from, name);
-	if stats.exists() && std::fs::rename(&stats, Catalog::stats(to, new_name)).is_err() {
+	if stats.exists() && std::fs::rename(&stats, Catalog::stats(to, name)).is_err() {
 		let _ = std::fs::remove_file(&stats);
 	}
 	Ok(())
@@ -819,46 +776,6 @@ mod tests {
 		let result = f.show("fruits", room, true);
 		assert!(matches!(result, Err(AdminError::NotEnoughMemory(_))), "{:?}", result);
 		assert_eq!(f.status("fruits"), Some(Status::Hidden));
-	}
-
-	#[test]
-	fn rename_moves_the_files_and_the_shown_model() {
-		let f = fixture("rename-shown", &[("fruits", "pomme\npoire\n")]);
-		let size = size_of(&f, "fruits");
-		f.catalog.rename(&f.generator, "fruits", "vergers").unwrap();
-		for extension in ["dat", "bin", "stats"] {
-			assert!(f.dir.join(format!("vergers.{}", extension)).exists(), "vergers.{}", extension);
-			assert!(!f.dir.join(format!("fruits.{}", extension)).exists(), "fruits.{}", extension);
-		}
-		assert!(f.loaded("vergers") && !f.loaded("fruits"));
-		assert_eq!(f.status("vergers"), Some(Status::Shown));
-		assert_eq!(size_of(&f, "vergers"), size);
-	}
-
-	#[test]
-	fn rename_moves_a_hidden_model_and_the_reason_of_its_failed_show() {
-		let f = fixture("rename-hidden", &[("fruits", "pomme\n")]);
-		f.catalog.hide(&f.generator, "fruits").unwrap();
-		lock(&f.catalog.errors).insert("fruits".to_owned(), "a reason".to_owned());
-		f.catalog.rename(&f.generator, "fruits", "vergers").unwrap();
-		assert!(f.dir.join("hidden/vergers.dat").exists() && f.dir.join("hidden/vergers.stats").exists());
-		let vergers = f.catalog.list().unwrap().into_iter().find(|model| model.name == "vergers").unwrap();
-		assert_eq!(vergers.status, Status::Hidden);
-		assert_eq!(vergers.error.as_deref(), Some("a reason"));
-		assert!(vergers.stats.is_some());
-		assert!(!f.loaded("vergers"));
-	}
-
-	#[test]
-	fn rename_refuses_a_taken_name_a_model_on_its_way_or_an_unknown_one() {
-		let f = fixture("rename-refused", &[("fruits", "pomme\n"), ("fleurs", "rose\n")]);
-		assert!(matches!(f.catalog.rename(&f.generator, "fruits", "fleurs"), Err(AdminError::Conflict(_))));
-		assert!(matches!(f.catalog.rename(&f.generator, "absent", "autre"), Err(AdminError::NotFound(_))));
-		f.catalog.reserve("legumes", b"chou\n").unwrap();
-		assert!(matches!(f.catalog.rename(&f.generator, "legumes", "potager"), Err(AdminError::Conflict(_))));
-		assert!(matches!(f.catalog.rename(&f.generator, "fruits", "legumes"), Err(AdminError::Conflict(_))));
-		// Nothing moved
-		assert!(f.loaded("fruits") && f.dir.join("fruits.dat").exists());
 	}
 
 	#[test]

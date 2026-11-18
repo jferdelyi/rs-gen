@@ -322,12 +322,6 @@ impl MultiGramModel {
 		&self.name
 	}
 
-	/// Changes the model's name. A model loaded in a `Generator` is renamed with
-	/// `Generator::rename_model`, which keeps its table in step.
-	pub fn set_name(&mut self, name: &str) {
-		name.clone_into(&mut self.name);
-	}
-
 	/// Returns the size of the model: sentences, states and their bytes.
 	pub fn stats(&self) -> ModelStats {
 		let mut stats = ModelStats {
