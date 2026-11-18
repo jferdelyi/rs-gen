@@ -46,7 +46,8 @@ Learning and loading:
 - `LearnProgress` is updated once per 1 024 lines: on an Apple M1 Pro, learning `english` takes 1.363 s against 1.353 s without it (median of 9 alternated builds, +0.7 %).
 - A model is learned as one partial model per processor, merged by moving the states. On ten processors, learning `english` peaks at 924 MB (2.25 times the loaded model); on one processor, the lines are learned straight into the model, about 1.2 to 1.3 times.
 - The frozen table does not change the learning peak: `english` still peaks at 928 MB on ten processors.
-- `ModelStats::estimated_bytes` estimates the memory of a loaded model from its states and sentences. It is calibrated on a Linux server (musl allocator), where the eleven models took 581 MB in hash tables, about 84 bytes per state besides the prefixes; macOS takes about 20 % more. It now overestimates a frozen model, until it is calibrated again on the server.
+- `ModelStats::estimated_bytes` estimates the memory of a loaded, frozen model from its states and sentences: 46 bytes per state besides the prefixes and the sentences. It is calibrated on a Linux server (musl allocator), where the eleven frozen models took 342 MB, about 44 bytes per state, and `french` alone 45; macOS takes about 20 % more. Right after a model is learned in the process, it takes about 1.4 times this memory until the process restarts: the allocator keeps the memory the hash table freed.
+- `ModelStats::estimated_build_bytes` follows the hash table of the learning, 88 bytes per state (581 MB for the eleven models in hash tables, on the same server): 1.5 times on one processor, 2.5 times on several, plus the text. On the server, learning `french` peaked at 26.4 MB with the frozen table, against 25.9 MB before.
 
 ## Tests
 

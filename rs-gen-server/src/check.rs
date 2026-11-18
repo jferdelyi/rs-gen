@@ -22,8 +22,9 @@ pub(crate) const MEMORY_MARGIN_BYTES: u64 = 64_000_000;
 /// States counted at most when the free memory is unknown (about 2 GB of model).
 const MAX_COUNTED_STATES: usize = 20_000_000;
 
-/// Every state costs more than this in the memory estimate: counting stops beyond the
-/// free memory divided by it, since such a model cannot fit.
+/// Every state costs more than this to be learned (the hash table of the learning, at least
+/// 1.5 times 88 bytes in the estimate): counting stops beyond the free memory divided by it,
+/// since such a model cannot be added.
 const MIN_BYTES_PER_STATE: u64 = 64;
 
 /// Longest model name.

@@ -66,20 +66,40 @@ pub struct ModelStats {
 }
 
 impl ModelStats {
-	/// Memory of a state besides the bytes of its prefix: its slot in the table,
-	/// the allocation of its prefix and its extra transitions, on average.
-	const BYTES_PER_STATE: u64 = 88;
+	/// Memory of a state of a frozen model besides the bytes of its prefix: its 32-byte
+	/// entry, its slots in the index and its extra transitions, on average.
+	const BYTES_PER_STATE: u64 = 46;
+
+	/// Memory of a state of a model that learns, in its hash table, besides the bytes of its
+	/// prefix: its slot in the table, the allocation of its prefix and its extra transitions.
+	const BYTES_PER_LEARNING_STATE: u64 = 88;
 
 	/// Memory of a sentence besides its bytes: its slot in the table and its allocation.
 	const BYTES_PER_SENTENCE: u64 = 48;
 
-	/// Estimated memory of the loaded model, in bytes.
+	/// Estimated memory of the loaded model, frozen, in bytes.
 	///
-	/// Calibrated on a Linux server (musl allocator) holding 11 models: 5.9 million states
-	/// took 581 MB, about 84 bytes per state besides the prefixes. An estimate, not a measure:
-	/// the system allocator of macOS takes about 20 % more.
+	/// Calibrated on a Linux server (musl allocator) holding 11 models: 5.9 million frozen
+	/// states took 342 MB, about 44 bytes per state besides the prefixes and the sentences,
+	/// and 45 for `french` alone. An estimate, not a measure: the system allocator of macOS
+	/// takes about 20 % more. Right after a model is learned in the process, it takes about
+	/// 1.4 times this memory until the process restarts: the allocator keeps the memory that
+	/// the hash table of the learning freed.
 	pub fn estimated_bytes(&self) -> u64 {
-		self.states as u64 * Self::BYTES_PER_STATE
+		self.bytes_with(Self::BYTES_PER_STATE)
+	}
+
+	/// Estimated memory of the model while it learns, in its hash table, in bytes.
+	///
+	/// Calibrated on the same server: 5.9 million states in hash tables took 581 MB,
+	/// about 84 bytes per state besides the prefixes.
+	fn learning_bytes(&self) -> u64 {
+		self.bytes_with(Self::BYTES_PER_LEARNING_STATE)
+	}
+
+	/// Memory of the states at `bytes_per_state` each, with their prefixes and the sentences.
+	fn bytes_with(&self, bytes_per_state: u64) -> u64 {
+		self.states as u64 * bytes_per_state
 			+ self.key_bytes as u64
 			+ self.sentences as u64 * Self::BYTES_PER_SENTENCE
 			+ self.sentence_bytes as u64
@@ -88,14 +108,16 @@ impl ModelStats {
 	/// Estimated peak memory while `MultiGramModel::new` builds the model
 	/// from a text file of `text_bytes` bytes, in bytes.
 	///
-	/// Measured on real models: the peak reached 1.2 to 1.3 times the memory of the loaded
-	/// model on one processor, and 2.25 to 2.4 times on ten, where the partial models
-	/// built in parallel are merged into the final one.
+	/// A model learns in a hash table and is frozen only at the end: the peak follows the
+	/// hash table. Measured on real models: the peak reached 1.2 to 1.3 times the hash table
+	/// on one processor (learning `french` on the server peaked at 26.4 MB for a table of
+	/// 24.8 MB), and 2.25 to 2.4 times on ten, where the partial models built in parallel are
+	/// merged into the final one.
 	pub fn estimated_build_bytes(&self, text_bytes: u64) -> u64 {
 		let model = if num_cpus::get() == 1 {
-			self.estimated_bytes() * 3 / 2
+			self.learning_bytes() * 3 / 2
 		} else {
-			self.estimated_bytes() * 5 / 2
+			self.learning_bytes() * 5 / 2
 		};
 		// The text, and one slice per line pointing into it
 		model + text_bytes * 4
@@ -785,6 +807,17 @@ mod tests {
 		assert_eq!(model.stats(), ModelStats { sentences: 1, sentence_bytes: 2, max_n: 4, states: 6, key_bytes: 10 });
 		assert_eq!(model.transition_count(), 6);
 		assert_eq!(MultiGramModel::default().stats(), ModelStats::default());
+	}
+
+	#[test]
+	fn the_estimates_follow_the_frozen_and_the_learning_layouts() {
+		let stats = ModelStats { sentences: 0, sentence_bytes: 0, max_n: 3, states: 1000, key_bytes: 0 };
+		// A frozen state is a 32-byte entry and 4-byte index slots, at most 70 % used: about
+		// 38 bytes at least; measured 44 to 45 on the server
+		let per_state = stats.estimated_bytes() / 1000;
+		assert!((38..=50).contains(&per_state), "{} bytes per frozen state", per_state);
+		// Learning goes through the hash table, at 88 bytes per state, 1.5 times at least
+		assert!(stats.estimated_build_bytes(0) >= 1000 * 88 * 3 / 2);
 	}
 
 	#[test]
