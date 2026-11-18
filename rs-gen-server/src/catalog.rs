@@ -103,7 +103,7 @@ pub(crate) struct ModelInfo {
 	/// Size of the binary cache, in bytes.
 	pub(crate) bin_bytes: Option<u64>,
 
-	/// Last change of the text file, in seconds since 1970.
+	/// Last change of the text file or of the display name, in seconds since 1970.
 	pub(crate) modified: Option<u64>,
 }
 
@@ -359,14 +359,22 @@ impl Catalog {
 				estimated_bytes: size.map(|size| size.stats.estimated_bytes()),
 				dat_bytes: dat.as_ref().map(|metadata| metadata.len()),
 				bin_bytes: std::fs::metadata(Self::bin(dir, &name)).ok().map(|metadata| metadata.len()),
-				modified: dat
-					.and_then(|metadata| metadata.modified().ok())
-					.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-					.map(|duration| duration.as_secs()),
+				modified: Self::modified(dir, &name),
 				name,
 			});
 		}
 		Ok(models)
+	}
+
+	/// Last change of the model `name` of `dir`, in seconds since 1970: of its text file,
+	/// or of its display name if it changed since. Moving the files keeps these dates.
+	fn modified(dir: &Path, name: &str) -> Option<u64> {
+		[Self::dat(dir, name), Self::label(dir, name)]
+			.iter()
+			.filter_map(|path| std::fs::metadata(path).and_then(|metadata| metadata.modified()).ok())
+			.max()
+			.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+			.map(|duration| duration.as_secs())
 	}
 
 	/// Tells whether a model, shown, hidden or being added, already has this name.
@@ -863,6 +871,18 @@ mod tests {
 		assert_eq!(label_of(&f, "fruits"), None);
 		assert!(!f.dir.join("fruits.label").exists());
 		assert!(f.catalog.labels().is_empty());
+	}
+
+	#[test]
+	fn a_new_display_name_changes_the_modification_date() {
+		let f = fixture("label-date", &[("fruits", "pomme\n")]);
+		// A text file written long ago
+		let long_ago = UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+		std::fs::File::options().write(true).open(f.dir.join("fruits.dat")).unwrap().set_modified(long_ago).unwrap();
+		let modified = |f: &Fixture| f.catalog.list().unwrap().into_iter().find(|model| model.name == "fruits").unwrap().modified;
+		assert_eq!(modified(&f), Some(1_600_000_000));
+		f.catalog.set_label("fruits", Some("Fruits")).unwrap();
+		assert!(modified(&f).unwrap() > 1_600_000_000, "{:?}", modified(&f));
 	}
 
 	#[test]
