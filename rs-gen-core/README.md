@@ -27,17 +27,26 @@ Library holding all the generation logic: learning character-level n-gram models
 A model keeps a state for every prefix of every order of every word, so the large models hold millions of states (5.4 million for the eleven models of `data/`). The layout is kept small on purpose:
 
 - a state is 24 bytes and stores its first transition inline: 81 % of the states have only one;
-- a prefix is a `Box<str>`, without the spare capacity of a `String`;
-- tests fail if a state grows above 24 bytes or a table entry above 40 bytes.
+- a model learns in a hash table, then is frozen once learned or loaded: its prefixes one after the other in a single buffer, its states in 32-byte entries found through an open addressing index (at most 70 % of the slots used). A frozen model that learns again goes back to the hash table first;
+- the binary cache keeps the layout of the hash table (a map from prefix to state): caches written before the frozen table are read as they are, and the other way round;
+- tests fail if a state grows above 24 bytes or a frozen entry above 32 bytes.
 
-Measured on an Apple M1 Pro with the eleven models of `data/`: about 650 MB once loaded, and about 0.04 ms per generated word with every model weighted (`nb_try=100`).
+Measured on an Apple M1 Pro with the eleven models of `data/` (5.9 million states, median of 5 alternated runs):
+
+| Layout | Memory once loaded | Per state, prefix included | Loading | Generation (`nb_try=100`, every model weighted) |
+|---|---|---|---|---|
+| Hash table | 593 MB | 101 bytes | 0.70 s | 0.041 ms per word |
+| Frozen table | 343 MB | 58 bytes | 0.54 s | 0.062 ms per word |
+
+The frozen and the hash table models hold the same states, transitions and sentences: compared on the eleven models, loaded from their cache and learned from their text. A sorted table with a binary search took 294 MB but generated words 6 times slower; an index keeping 32 bits of each hash took 392 MB for 0.046 ms per word.
 
 Learning and loading:
 
 - The binary cache is read and written as a stream: loading `english` peaks at 410 MB instead of 473 MB when the cache was read whole.
 - `LearnProgress` is updated once per 1 024 lines: on an Apple M1 Pro, learning `english` takes 1.363 s against 1.353 s without it (median of 9 alternated builds, +0.7 %).
 - A model is learned as one partial model per processor, merged by moving the states. On ten processors, learning `english` peaks at 924 MB (2.25 times the loaded model); on one processor, the lines are learned straight into the model, about 1.2 to 1.3 times.
-- `ModelStats::estimated_bytes` estimates the memory of a loaded model from its states and sentences. It is calibrated on a Linux server (musl allocator), where the eleven models took 581 MB, about 84 bytes per state besides the prefixes; macOS takes about 20 % more.
+- The frozen table does not change the learning peak: `english` still peaks at 928 MB on ten processors.
+- `ModelStats::estimated_bytes` estimates the memory of a loaded model from its states and sentences. It is calibrated on a Linux server (musl allocator), where the eleven models took 581 MB in hash tables, about 84 bytes per state besides the prefixes; macOS takes about 20 % more. It now overestimates a frozen model, until it is calibrated again on the server.
 
 ## Tests
 
