@@ -230,8 +230,17 @@ td.actions button + button {
   color: #57606a;
 }
 
-.status-building {
+.status-learning,
+.status-saving,
+.status-testing,
+.status-loading {
   color: #9a6700;
+}
+
+/* A hidden model whose last show failed: the reason is in the tooltip */
+.status-error {
+  text-decoration: underline dotted;
+  cursor: help;
 }
 
 .status-failed {
@@ -313,7 +322,74 @@ ul.message {
     flex: 1 1 100%;
   }
 
+  /* The buttons of a title go under it */
+  .admin-title {
+    flex-wrap: wrap;
+  }
+
+  .title-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+  }
+
   .fixed-btn {
     flex: 1 1 140px;
+  }
+}
+
+/* =========================
+   Models as cards on a phone: no sideways scroll
+========================= */
+@media (max-width: 700px) {
+  #models-table thead {
+    display: none;
+  }
+
+  #models-table,
+  #models-table tbody {
+    display: block;
+  }
+
+  /* Name and status on top, the figures two by two, the buttons at the bottom */
+  #models-table tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid #eaeef2;
+  }
+
+  #models-table td {
+    padding: 0;
+    border: none;
+    white-space: normal;
+    text-align: left;
+  }
+
+  #models-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: #57606a;
+    font-size: 12px;
+  }
+
+  #models-table td.model-name,
+  #models-table td.status {
+    font-size: 15px;
+  }
+
+  #models-table td.model-name::before,
+  #models-table td.status::before,
+  #models-table td.actions::before {
+    content: none;
+  }
+
+  #models-table td.status {
+    text-align: right;
+  }
+
+  #models-table td.actions {
+    grid-column: 1 / -1;
+    text-align: left;
   }
 }

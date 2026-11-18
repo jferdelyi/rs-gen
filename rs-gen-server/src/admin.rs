@@ -338,8 +338,8 @@ enum Addition {
 }
 
 /// `POST /v1/admin/models?name=<name>[&force=true]`, with the text file as body: checks it
-/// again, then builds the model in the background. The model is listed as building, then
-/// shown once it generates words, or listed as failed. With `force=true`, a model that
+/// again, then builds the model in the background. The model is listed as learning, saving
+/// and testing, then shown once it generates words, or listed as failed. With `force=true`, a model that
 /// fits only by using swap is added too; a problem still refuses it.
 ///
 /// # Returns
@@ -403,19 +403,42 @@ async fn hide_model(state: web::Data<AppState>, path: web::Path<String>) -> Http
 	run_action(state, path.into_inner(), "hidden", |state, name| state.catalog.hide(&state.generator, name)).await
 }
 
-/// `POST /v1/admin/models/{name}/show[?force=true]`: loads a hidden model again, if the
-/// memory allows it. With `force=true`, a model that fits only by using swap is loaded too.
+/// `POST /v1/admin/models/{name}/show[?force=true]`: loads a hidden model again in the
+/// background, if the memory allows it. The model is listed as loading (or learning and
+/// saving, without a binary cache), then shown, or hidden again with the reason of the
+/// failure. With `force=true`, a model that fits only by using swap is loaded too.
 ///
 /// # Returns
-/// - 200 OK: the model is shown
+/// - 202 Accepted: the loading started
+/// - 409 Conflict: the model is not hidden, or another model is being added or shown
 /// - 422 Unprocessable Content: not enough memory, with `"forceable": true` when it fits by using swap
 async fn show_model(state: web::Data<AppState>, path: web::Path<String>, query: web::Query<ForceQuery>) -> HttpResponse {
+	let name = path.into_inner();
+	if !check::is_valid_name(&name) {
+		return error_response(StatusCode::BAD_REQUEST, "Invalid model name");
+	}
 	let force = query.force;
-	let verb = if force { "shown, forced" } else { "shown" };
-	run_action(state, path.into_inner(), verb, move |state, name| {
-		state.catalog.show(&state.generator, name, (state.memory)().room(), force)
+	let started = web::block(move || {
+		state.catalog.show(&name, (state.memory)().room(), force)?;
+		let (loader, loaded) = (state.clone(), name.clone());
+		let spawned = std::thread::Builder::new()
+			.name("model-load".to_owned())
+			.spawn(move || loader.catalog.load(&loader.generator, &loaded));
+		if let Err(e) = spawned {
+			let error = format!("Cannot start the loading: {}", e);
+			state.catalog.abandon_show(&name, error.clone());
+			return Err(AdminError::Internal(error));
+		}
+		eprintln!("admin: model '{}' being shown{}", name, if force { ", forced" } else { "" });
+		Ok(())
 	})
-	.await
+	.await;
+
+	match started {
+		Ok(Ok(())) => HttpResponse::Accepted().json(Done { ok: true }),
+		Ok(Err(error)) => admin_error(&error),
+		Err(_) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "The action was interrupted"),
+	}
 }
 
 /// Body of `DELETE /v1/admin/models/{name}`.
@@ -584,7 +607,7 @@ mod tests {
 		}};
 	}
 
-	// Waits for a model to leave the building status, and returns its status
+	// Waits for a model to be neither learning, saving, testing nor loading, and returns its status
 	macro_rules! wait_build {
 		($app:expr, $cookie:expr, $name:expr) => {{
 			let start = Instant::now();
@@ -592,10 +615,10 @@ mod tests {
 				let response = test::call_service($app, admin("GET", "/v1/admin/models").cookie($cookie.clone()).to_request()).await;
 				let body: Models = test::read_body_json(response).await;
 				let status = body.models.into_iter().find(|model| model.name == $name).map(|model| model.status).unwrap_or_default();
-				if status != "building" {
+				if !["learning", "saving", "testing", "loading"].contains(&status.as_str()) {
 					break status;
 				}
-				assert!(start.elapsed() < Duration::from_secs(10), "the build did not end within 10 seconds");
+				assert!(start.elapsed() < Duration::from_secs(10), "the model was still on its way after 10 seconds");
 				actix_web::rt::time::sleep(Duration::from_millis(20)).await;
 			}
 		}};
@@ -714,9 +737,10 @@ mod tests {
 		let public = to_bytes(test::call_service(&app, TestRequest::get().uri("/v1/models").to_request()).await.into_body()).await.unwrap();
 		assert_eq!(public, "fruits");
 
-		// Show again
+		// Show again: loaded in the background
 		let response = test::call_service(&app, admin("POST", "/v1/admin/models/legumes/show").cookie(cookie.clone()).to_request()).await;
-		assert_eq!(response.status(), StatusCode::OK);
+		assert_eq!(response.status(), StatusCode::ACCEPTED);
+		assert_eq!(wait_build!(&app, cookie, "legumes"), "shown");
 
 		// Delete: the name must be typed again
 		let response = test::call_service(&app, admin("DELETE", "/v1/admin/models/legumes").cookie(cookie.clone()).set_json(Confirm { confirm: "fruits" }).to_request()).await;
@@ -837,7 +861,8 @@ mod tests {
 		let refusal: Refusal = test::read_body_json(response).await;
 		assert_eq!(refusal.forceable, Some(true));
 		let response = test::call_service(&app, admin("POST", "/v1/admin/models/legumes/show?force=true").cookie(cookie.clone()).to_request()).await;
-		assert_eq!(response.status(), StatusCode::OK);
+		assert_eq!(response.status(), StatusCode::ACCEPTED);
+		assert_eq!(wait_build!(&app, cookie, "legumes"), "shown");
 		let public = to_bytes(test::call_service(&app, TestRequest::get().uri("/v1/models").to_request()).await.into_body()).await.unwrap();
 		let mut names: Vec<&str> = std::str::from_utf8(&public).unwrap().lines().collect();
 		names.sort_unstable();

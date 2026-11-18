@@ -12,7 +12,7 @@ Library holding all the generation logic: learning character-level n-gram models
 | `src/model/mod.rs` | Declares the model modules. |
 | `src/model/generator.rs` | `Generator`: loads every `.dat` of a directory, adds or removes a model while it is used, draws the models by weight, generates a word, retries when the word already exists. |
 | `src/model/prediction_input.rs` | `PredictionInput` and `StartSeed`: generation parameters and model weights. |
-| `src/model/multigram_model.rs` | `MultiGramModel`: one model per training file, made of one `NGramModel` per order, its sentences, and its binary cache. `ModelStats` gives its size and estimated memory; `count_text` gives the same statistics from a text, without learning it. |
+| `src/model/multigram_model.rs` | `MultiGramModel`: one model per training file, made of one `NGramModel` per order, its sentences, and its binary cache. `new` loads a model in one call; `from_cache`, `learn_file` (with a `LearnProgress` that counts the lines learned) and `save_cache` are its steps, to tell which one runs. `ModelStats` gives its size and estimated memory; `count_text` gives the same statistics from a text, without learning it. |
 | `src/model/ngram_model.rs` | `NGramModel`: the states of one order n, keyed by their prefix of n - 1 characters. |
 | `src/model/state.rs` | `State`: the next characters seen after a prefix and their counts, and the weighted draw of the next one. |
 
@@ -35,6 +35,7 @@ Measured on an Apple M1 Pro with the eleven models of `data/`: about 650 MB once
 Learning and loading:
 
 - The binary cache is read and written as a stream: loading `english` peaks at 410 MB instead of 473 MB when the cache was read whole.
+- `LearnProgress` is updated once per 1 024 lines: on an Apple M1 Pro, learning `english` takes 1.363 s against 1.353 s without it (median of 9 alternated builds, +0.7 %).
 - A model is learned as one partial model per processor, merged by moving the states. On ten processors, learning `english` peaks at 924 MB (2.25 times the loaded model); on one processor, the lines are learned straight into the model, about 1.2 to 1.3 times.
 - `ModelStats::estimated_bytes` estimates the memory of a loaded model from its states and sentences. It is calibrated on a Linux server (musl allocator), where the eleven models took 581 MB, about 84 bytes per state besides the prefixes; macOS takes about 20 % more.
 

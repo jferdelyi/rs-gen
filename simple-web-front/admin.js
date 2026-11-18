@@ -11,8 +11,8 @@ const ADMIN_URL = "/generator/api/v1/admin";
 // Header required on every admin request
 const ADMIN_HEADER = "X-Rs-Gen-Admin";
 
-// Refresh period of the list while a model is being built
-const BUILD_REFRESH_MS = 2000;
+// Refresh period of the list while a model is on its way: learning, saving, testing or loading
+const BUSY_REFRESH_MS = 1000;
 
 /* =============================
    DOM References
@@ -96,9 +96,27 @@ function formatDate(seconds) {
 const STATUS_LABELS = {
     shown: "Shown",
     hidden: "Hidden",
-    building: "Building",
+    learning: "Learning",
+    saving: "Saving the cache",
+    testing: "Testing",
+    loading: "Loading",
     failed: "Failed"
 };
+
+// Statuses of a model on its way: no action until it ends
+const ON_THE_WAY = new Set(["learning", "saving", "testing", "loading"]);
+
+// Label of the status of a model, with the share learned and the reason of a failed show
+function statusLabel(model) {
+    const label = STATUS_LABELS[model.status] || model.status;
+    if (model.status === "learning" && model.progress !== null && model.progress !== undefined) {
+        return `${label} ${Math.floor(model.progress * 100)} %`;
+    }
+    if (model.status === "hidden" && model.error) {
+        return `${label}, show failed`;
+    }
+    return label;
+}
 
 /* =============================
    API
@@ -216,6 +234,9 @@ function actionButton(label, title, onClick, className = "action-btn") {
     return button;
 }
 
+// Column titles, shown above each figure when the table becomes cards on a phone
+const COLUMN_LABELS = [...document.querySelectorAll("#models-table thead th")].map(th => th.textContent);
+
 function renderModels(list) {
     models.replaceChildren(...list.map(model => {
         const row = document.createElement("tr");
@@ -225,15 +246,17 @@ function renderModels(list) {
             if (className) {
                 td.className = className;
             }
+            td.dataset.label = COLUMN_LABELS[row.children.length] || "";
             row.appendChild(td);
             return td;
         };
 
         cell(model.name, "model-name");
-        const status = cell(STATUS_LABELS[model.status] || model.status);
+        const status = cell(statusLabel(model));
         status.classList.add("status", `status-${model.status}`);
         if (model.error) {
             status.title = model.error;
+            status.classList.add("status-error");
         }
         cell(formatNumber(model.stats?.sentences), "number");
         cell(formatNumber(model.stats?.states), "number");
@@ -249,7 +272,7 @@ function renderModels(list) {
         } else if (model.status === "hidden") {
             actions.appendChild(actionButton("Show", "Load it again into the generator, if the memory allows it", () => runAction(model.name, "show")));
         }
-        if (model.status !== "building") {
+        if (!ON_THE_WAY.has(model.status)) {
             actions.appendChild(actionButton("Delete", "Delete its files for good", () => openDelete(model.name), "danger-btn"));
         }
         return row;
@@ -268,8 +291,8 @@ async function loadModels() {
         renderMemory(data);
         renderModels(data.models);
         updated.textContent = `Updated at ${new Date().toLocaleTimeString("en-GB")}`;
-        if (data.models.some(model => model.status === "building")) {
-            refreshTimer = setTimeout(loadModels, BUILD_REFRESH_MS);
+        if (data.models.some(model => ON_THE_WAY.has(model.status))) {
+            refreshTimer = setTimeout(loadModels, BUSY_REFRESH_MS);
         }
     } catch (error) {
         if (!(error instanceof LoginRequired)) {

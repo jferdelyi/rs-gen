@@ -1,19 +1,24 @@
-//! Model files of the data directory and their status: shown, hidden, being built.
+//! Model files of the data directory and their status: shown, hidden, or on their way.
 //!
 //! - A shown model is `data/<name>.dat` (and its cache `data/<name>.bin`), loaded in the generator.
 //! - A hidden model is moved to `data/hidden/`: it is not loaded and takes no memory.
 //! - A model being added is built in `data/building/`, then moved to `data/` once it works.
+//! - A hidden model being shown is loaded from `data/hidden/`, then moved to `data/`.
 //!
-//! `Generator::new` reads only the files directly in `data/`: the sub-directories are ignored.
+//! Next to each model, `<name>.stats` keeps its size once it was loaded, so that a hidden
+//! model still shows its figures after a restart.
+//!
+//! `Generator::new` reads only the `.dat` files directly in `data/`: the sub-directories and
+//! the other files are ignored.
 
 use crate::check::{Fit, MEMORY_MARGIN_BYTES, fit, megabytes, megabytes_or_unknown};
 use crate::system::Room;
 use rs_gen_core::model::generator::Generator;
-use rs_gen_core::model::multigram_model::{ModelStats, MultiGramModel};
+use rs_gen_core::model::multigram_model::{LearnProgress, ModelStats, MultiGramModel};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, RwLock, RwLockWriteGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockWriteGuard};
 use std::time::UNIX_EPOCH;
 
 /// Words generated to check that a new model works.
@@ -52,9 +57,15 @@ pub(crate) enum Status {
 	Shown,
 	/// Kept on disk, not loaded.
 	Hidden,
-	/// Being built from its text file.
-	Building,
-	/// Its build failed; it can be deleted.
+	/// Learning its text file: being added, or shown without a binary cache.
+	Learning,
+	/// Writing its binary cache.
+	Saving,
+	/// Generating a few words to check that it works.
+	Testing,
+	/// Reading its binary cache, to be shown.
+	Loading,
+	/// Its addition failed; it can be deleted.
 	Failed,
 }
 
@@ -67,13 +78,16 @@ pub(crate) struct ModelInfo {
 	/// Status of the model.
 	pub(crate) status: Status,
 
-	/// Why the build failed, for a failed model.
+	/// Share of the lines learned, from 0 to 1, while the model is learning.
+	pub(crate) progress: Option<f64>,
+
+	/// Why the addition failed, for a failed model; why the last show failed, for a hidden one.
 	pub(crate) error: Option<String>,
 
-	/// Size of the model, if it was loaded since the server started.
+	/// Size of the model, once it was loaded.
 	pub(crate) stats: Option<ModelStats>,
 
-	/// Number of transitions, if the model was loaded since the server started.
+	/// Number of transitions, once the model was loaded.
 	pub(crate) transitions: Option<usize>,
 
 	/// Estimated memory of the model once loaded, in bytes.
@@ -90,7 +104,7 @@ pub(crate) struct ModelInfo {
 }
 
 /// Size of a model, known once it was loaded.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Known {
 	/// Sentences, states and their bytes.
 	stats: ModelStats,
@@ -104,15 +118,87 @@ impl Known {
 	fn of(model: &MultiGramModel) -> Self {
 		Self { stats: model.stats(), transitions: model.transition_count() }
 	}
+
+	/// Writes the size next to the model `name` of `dir`, as `<name>.stats`: one `key value` per line.
+	fn save(&self, dir: &Path, name: &str) -> std::io::Result<()> {
+		let stats = self.stats;
+		let text = format!(
+			"sentences {}\nsentence_bytes {}\nmax_n {}\nstates {}\nkey_bytes {}\ntransitions {}\n",
+			stats.sentences, stats.sentence_bytes, stats.max_n, stats.states, stats.key_bytes, self.transitions
+		);
+		let path = Catalog::stats(dir, name);
+		let temporary = path.with_extension("stats.tmp");
+		std::fs::write(&temporary, text)?;
+		std::fs::rename(&temporary, &path)
+	}
+
+	/// Reads the size written by `save`, `None` if there is none or if it is unreadable.
+	fn read(dir: &Path, name: &str) -> Option<Self> {
+		let text = std::fs::read_to_string(Catalog::stats(dir, name)).ok()?;
+		let values: HashMap<&str, usize> = text
+			.lines()
+			.filter_map(|line| line.split_once(' '))
+			.filter_map(|(key, value)| value.parse().ok().map(|value| (key, value)))
+			.collect();
+		let value = |key: &str| values.get(key).copied();
+		Some(Self {
+			stats: ModelStats {
+				sentences: value("sentences")?,
+				sentence_bytes: value("sentence_bytes")?,
+				max_n: value("max_n")?,
+				states: value("states")?,
+				key_bytes: value("key_bytes")?,
+			},
+			transitions: value("transitions")?,
+		})
+	}
 }
 
-/// State of a model being added.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Job {
-	/// Being built.
-	Building,
-	/// The build failed, for this reason.
+/// Step of a model being added or shown.
+#[derive(Debug, Clone)]
+enum Step {
+	/// Learning its text file; the progress counts the lines learned.
+	Learning(Arc<LearnProgress>),
+	/// Writing its binary cache.
+	Saving,
+	/// Generating a few words to check that it works.
+	Testing,
+	/// Reading its binary cache.
+	Loading,
+	/// Its addition failed, for this reason.
 	Failed(String),
+}
+
+/// A model being added, its files in `data/building/`, or a hidden model being shown,
+/// its files in `data/hidden/`.
+#[derive(Debug, Clone)]
+struct Job {
+	/// What it is doing.
+	step: Step,
+
+	/// True for an addition, false for a hidden model being shown.
+	adding: bool,
+}
+
+impl Job {
+	/// Tells whether the job is still running: not failed.
+	fn running(&self) -> bool {
+		!matches!(self.step, Step::Failed(_))
+	}
+
+	/// Status, share of the lines learned and error to show for the model.
+	fn describe(&self) -> (Status, Option<f64>, Option<String>) {
+		match &self.step {
+			Step::Learning(progress) => {
+				let (done, total) = progress.lines();
+				(Status::Learning, (total > 0).then(|| done as f64 / total as f64), None)
+			}
+			Step::Saving => (Status::Saving, None, None),
+			Step::Testing => (Status::Testing, None, None),
+			Step::Loading => (Status::Loading, None, None),
+			Step::Failed(error) => (Status::Failed, None, Some(error.clone())),
+		}
+	}
 }
 
 /// Model files of the data directory and what is known about them.
@@ -123,22 +209,35 @@ pub(crate) struct Catalog {
 	/// Size of the models loaded since the server started, shown or hidden since.
 	known: Mutex<HashMap<String, Known>>,
 
-	/// Models being added, or whose addition failed.
+	/// Models being added or shown, and the additions that failed.
 	jobs: Mutex<HashMap<String, Job>>,
+
+	/// Why the last show of a hidden model failed, by name.
+	errors: Mutex<HashMap<String, String>>,
 }
 
 impl Catalog {
-	/// Creates the catalog of `data_dir`, whose shown models are already loaded in `generator`.
+	/// Creates the catalog of `data_dir`, whose shown models are already loaded in `generator`,
+	/// and writes their `.stats` files.
 	pub(crate) fn new<P: AsRef<Path>>(data_dir: P, generator: &Generator) -> Self {
-		let known = generator
+		let data_dir = data_dir.as_ref().to_path_buf();
+		let known: HashMap<String, Known> = generator
 			.get_model_names()
 			.into_iter()
 			.filter_map(|name| generator.get_model(&name).map(|model| (name, Known::of(model))))
 			.collect();
+		for (name, size) in &known {
+			if Known::read(&data_dir, name) != Some(*size)
+				&& let Err(e) = size.save(&data_dir, name)
+			{
+				eprintln!("admin: cannot write the size of '{}': {}", name, e);
+			}
+		}
 		Self {
-			data_dir: data_dir.as_ref().to_path_buf(),
+			data_dir,
 			known: Mutex::new(known),
 			jobs: Mutex::new(HashMap::new()),
+			errors: Mutex::new(HashMap::new()),
 		}
 	}
 
@@ -162,18 +261,31 @@ impl Catalog {
 		dir.join(format!("{}.bin", name))
 	}
 
-	/// Lists every model: shown, hidden, being built or failed, sorted by name.
+	/// Size file of the model `name` in `dir`.
+	fn stats(dir: &Path, name: &str) -> PathBuf {
+		dir.join(format!("{}.stats", name))
+	}
+
+	/// Lists every model: shown, hidden, on its way or failed, sorted by name.
 	pub(crate) fn list(&self) -> Result<Vec<ModelInfo>, AdminError> {
 		// Copied, not held: the other actions lock `jobs` before `known`
 		let known = lock(&self.known).clone();
+		let jobs = lock(&self.jobs).clone();
+		let errors = lock(&self.errors).clone();
 		let mut models = Vec::new();
-		for (dir, status) in [(self.data_dir.clone(), Status::Shown), (self.hidden_dir(), Status::Hidden)] {
+		for (dir, on_disk) in [(self.data_dir.clone(), Status::Shown), (self.hidden_dir(), Status::Hidden)] {
 			for name in dat_names(&dir)? {
-				let size = known.get(&name).copied();
+				let size = known.get(&name).copied().or_else(|| Known::read(&dir, &name));
+				let (status, progress, error) = match jobs.get(&name) {
+					// A hidden model being shown
+					Some(job) => job.describe(),
+					None => (on_disk, None, errors.get(&name).cloned()),
+				};
 				let dat = std::fs::metadata(Self::dat(&dir, &name)).ok();
 				models.push(ModelInfo {
 					status,
-					error: None,
+					progress,
+					error,
 					stats: size.map(|size| size.stats),
 					transitions: size.map(|size| size.transitions),
 					estimated_bytes: size.map(|size| size.stats.estimated_bytes()),
@@ -187,14 +299,12 @@ impl Catalog {
 				});
 			}
 		}
-		for (name, job) in lock(&self.jobs).iter() {
-			let (status, error) = match job {
-				Job::Building => (Status::Building, None),
-				Job::Failed(error) => (Status::Failed, Some(error.clone())),
-			};
+		for (name, job) in jobs.iter().filter(|(_, job)| job.adding) {
+			let (status, progress, error) = job.describe();
 			models.push(ModelInfo {
 				name: name.clone(),
 				status,
+				progress,
 				error,
 				stats: None,
 				transitions: None,
@@ -218,14 +328,30 @@ impl Catalog {
 		Self::dat(&self.data_dir, name).exists() || Self::dat(&self.hidden_dir(), name).exists()
 	}
 
+	/// Changes the step of a running job.
+	fn set_step(&self, name: &str, step: Step) {
+		if let Some(job) = lock(&self.jobs).get_mut(name) {
+			job.step = step;
+		}
+	}
+
+	/// Error for an action that needs the memory while another model is being added or shown.
+	fn busy() -> AdminError {
+		AdminError::Conflict("Another model is being added or shown: wait for it to end".to_owned())
+	}
+
 	/// Hides a shown model: its files go to `data/hidden/` and it leaves the memory.
 	pub(crate) fn hide(&self, generator: &RwLock<Generator>, name: &str) -> Result<(), AdminError> {
-		let _jobs = lock(&self.jobs);
+		let jobs = lock(&self.jobs);
+		if jobs.get(name).is_some_and(Job::running) {
+			return Err(AdminError::Conflict(format!("The model '{}' is being shown: wait for it to end", name)));
+		}
 		if !Self::dat(&self.data_dir, name).exists() {
 			return Err(self.not_shown(name));
 		}
 		std::fs::create_dir_all(self.hidden_dir())?;
 		move_model(&self.data_dir, &self.hidden_dir(), name)?;
+		lock(&self.errors).remove(name);
 		let model = write(generator)?.remove_model(name);
 		// Freed once the generator is unlocked: freeing a big model takes time
 		drop(model);
@@ -241,14 +367,17 @@ impl Catalog {
 		}
 	}
 
-	/// Shows a hidden model again: its files come back to `data/` and it is loaded,
-	/// if the server has the memory for it.
+	/// Starts showing a hidden model, if the server has the memory for it: the model is
+	/// listed as loading until `load`, run on its own thread, ends.
 	///
 	/// # Parameters
 	/// - `room`: memory the server can still give, in RAM and with swap.
-	/// - `force`: loads the model even if it fits only by using swap.
-	pub(crate) fn show(&self, generator: &RwLock<Generator>, name: &str, room: Room, force: bool) -> Result<(), AdminError> {
-		let _jobs = lock(&self.jobs);
+	/// - `force`: shows the model even if it fits only by using swap.
+	pub(crate) fn show(&self, name: &str, room: Room, force: bool) -> Result<(), AdminError> {
+		let mut jobs = lock(&self.jobs);
+		if jobs.get(name).is_some_and(Job::running) {
+			return Err(AdminError::Conflict(format!("The model '{}' is already being shown", name)));
+		}
 		let hidden = self.hidden_dir();
 		if !Self::dat(&hidden, name).exists() {
 			return Err(if Self::dat(&self.data_dir, name).exists() {
@@ -259,6 +388,10 @@ impl Catalog {
 		}
 		if Self::dat(&self.data_dir, name).exists() {
 			return Err(AdminError::Conflict(format!("A shown model is already named '{}'", name)));
+		}
+		// One model added or shown at a time: each one takes much memory
+		if jobs.values().any(Job::running) {
+			return Err(Self::busy());
 		}
 
 		if room != Room::default() {
@@ -283,25 +416,71 @@ impl Catalog {
 			}
 		}
 
-		move_model(&hidden, &self.data_dir, name)?;
-		let model = match MultiGramModel::new(Self::dat(&self.data_dir, name)) {
-			Ok(model) => model,
-			Err(e) => {
-				move_model(&self.data_dir, &hidden, name)?;
-				return Err(AdminError::Internal(format!("Cannot load '{}': {}", name, e)));
+		jobs.insert(name.to_owned(), Job { step: Step::Loading, adding: false });
+		lock(&self.errors).remove(name);
+		Ok(())
+	}
+
+	/// Loads a model that `show` started to show, then moves it to `data/`.
+	/// Slow: run it on its own thread. On failure, the model stays hidden, with the reason.
+	pub(crate) fn load(&self, generator: &RwLock<Generator>, name: &str) {
+		let result = self.load_and_show(generator, name);
+		let mut jobs = lock(&self.jobs);
+		jobs.remove(name);
+		match result {
+			Ok(()) => eprintln!("admin: model '{}' loaded", name),
+			Err(error) => {
+				eprintln!("admin: model '{}' not loaded: {}", name, error);
+				lock(&self.errors).insert(name.to_owned(), error);
+			}
+		}
+	}
+
+	/// Gives up a show that `show` started but whose loading could not start.
+	pub(crate) fn abandon_show(&self, name: &str, error: String) {
+		let mut jobs = lock(&self.jobs);
+		jobs.remove(name);
+		lock(&self.errors).insert(name.to_owned(), error);
+	}
+
+	/// Steps of `load` that can fail.
+	fn load_and_show(&self, generator: &RwLock<Generator>, name: &str) -> Result<(), String> {
+		let hidden = self.hidden_dir();
+		let dat = Self::dat(&hidden, name);
+		let model = match MultiGramModel::from_cache(&dat).map_err(|e| format!("Cannot read the cache: {}", e))? {
+			Some(model) => model,
+			// No cache: the model is learned from its text file, then its cache is written
+			None => {
+				let progress = Arc::new(LearnProgress::default());
+				self.set_step(name, Step::Learning(Arc::clone(&progress)));
+				let model = MultiGramModel::learn_file(&dat, &progress).map_err(|e| format!("Cannot learn the model: {}", e))?;
+				self.set_step(name, Step::Saving);
+				model.save_cache(&dat).map_err(|e| format!("Cannot write the cache: {}", e))?;
+				model
 			}
 		};
-		lock(&self.known).insert(name.to_owned(), Known::of(&model));
-		write(generator)?.insert_model(model).map_err(AdminError::Conflict)
+		let known = Known::of(&model);
+		if let Err(e) = known.save(&hidden, name) {
+			eprintln!("admin: cannot write the size of '{}': {}", name, e);
+		}
+		move_model(&hidden, &self.data_dir, name).map_err(|e| format!("Cannot move the model files: {:?}", e))?;
+		lock(&self.known).insert(name.to_owned(), known);
+		let inserted = write(generator).map_err(|e| format!("{:?}", e)).and_then(|mut generator| generator.insert_model(model));
+		if let Err(error) = inserted {
+			let _ = move_model(&self.data_dir, &hidden, name);
+			return Err(error);
+		}
+		Ok(())
 	}
 
 	/// Estimated peak memory to load the model `name` of `dir`.
 	///
-	/// Its size is known if it was loaded since the server started, counted from its text file otherwise.
+	/// Its size is known if it was loaded once, counted from its text file otherwise.
 	/// Without a binary cache, the model is built: the peak is the one of a build.
 	fn needed_to_load(&self, dir: &Path, name: &str) -> Result<u64, AdminError> {
 		let dat_path = Self::dat(dir, name);
-		let stats = match lock(&self.known).get(name) {
+		let known = lock(&self.known).get(name).copied().or_else(|| Known::read(dir, name));
+		let stats = match known {
 			Some(known) => known.stats,
 			None => MultiGramModel::count_text(&std::fs::read_to_string(&dat_path)?, usize::MAX).stats,
 		};
@@ -317,8 +496,10 @@ impl Catalog {
 	pub(crate) fn delete(&self, generator: &RwLock<Generator>, name: &str) -> Result<(), AdminError> {
 		let mut jobs = lock(&self.jobs);
 		match jobs.get(name) {
-			Some(Job::Building) => return Err(AdminError::Conflict(format!("The model '{}' is being built", name))),
-			Some(Job::Failed(_)) => {
+			Some(job) if job.running() => {
+				return Err(AdminError::Conflict(format!("The model '{}' is being added or shown: wait for it to end", name)));
+			}
+			Some(_) => {
 				jobs.remove(name);
 				remove_model_files(&self.building_dir(), name)?;
 				return Ok(());
@@ -336,18 +517,19 @@ impl Catalog {
 			return Err(AdminError::NotFound(format!("No model named '{}'", name)));
 		}
 		lock(&self.known).remove(name);
+		lock(&self.errors).remove(name);
 		Ok(())
 	}
 
 	/// Saves the text file of a new model and reserves its name, before the build.
 	///
 	/// # Errors
-	/// Returns a conflict if the name is taken or if another model is being built:
-	/// one build at a time, a build takes much memory.
+	/// Returns a conflict if the name is taken or if another model is being added or shown:
+	/// one at a time, each one takes much memory.
 	pub(crate) fn reserve(&self, name: &str, bytes: &[u8]) -> Result<(), AdminError> {
 		let mut jobs = lock(&self.jobs);
-		if jobs.values().any(|job| *job == Job::Building) {
-			return Err(AdminError::Conflict("Another model is being built: wait for it to end".to_owned()));
+		if jobs.values().any(Job::running) {
+			return Err(Self::busy());
 		}
 		if jobs.contains_key(name) || self.on_disk(name) {
 			return Err(AdminError::Conflict(format!("A model named '{}' already exists", name)));
@@ -357,7 +539,7 @@ impl Catalog {
 		// A cache left by an interrupted build would be read instead of the new text
 		remove_model_files(&building, name)?;
 		std::fs::write(Self::dat(&building, name), bytes)?;
-		jobs.insert(name.to_owned(), Job::Building);
+		jobs.insert(name.to_owned(), Job { step: Step::Learning(Arc::new(LearnProgress::default())), adding: true });
 		Ok(())
 	}
 
@@ -369,10 +551,12 @@ impl Catalog {
 		match result {
 			Ok(()) => {
 				jobs.remove(name);
+				eprintln!("admin: model '{}' built", name);
 			}
 			Err(error) => {
+				eprintln!("admin: model '{}' not built: {}", name, error);
 				let _ = remove_model_files(&self.building_dir(), name);
-				jobs.insert(name.to_owned(), Job::Failed(error));
+				jobs.insert(name.to_owned(), Job { step: Step::Failed(error), adding: true });
 			}
 		}
 	}
@@ -380,15 +564,24 @@ impl Catalog {
 	/// Gives up a reserved model whose build could not start: it is listed as failed.
 	pub(crate) fn abandon(&self, name: &str, error: String) {
 		let _ = remove_model_files(&self.building_dir(), name);
-		lock(&self.jobs).insert(name.to_owned(), Job::Failed(error));
+		lock(&self.jobs).insert(name.to_owned(), Job { step: Step::Failed(error), adding: true });
 	}
 
 	/// Steps of `build` that can fail.
 	fn build_and_show(&self, generator: &RwLock<Generator>, name: &str) -> Result<(), String> {
 		let building = self.building_dir();
-		let model = MultiGramModel::new(Self::dat(&building, name)).map_err(|e| format!("Cannot build the model: {}", e))?;
+		let dat = Self::dat(&building, name);
+		let progress = Arc::new(LearnProgress::default());
+		self.set_step(name, Step::Learning(Arc::clone(&progress)));
+		let model = MultiGramModel::learn_file(&dat, &progress).map_err(|e| format!("Cannot build the model: {}", e))?;
+		self.set_step(name, Step::Saving);
+		model.save_cache(&dat).map_err(|e| format!("Cannot write the cache: {}", e))?;
+		self.set_step(name, Step::Testing);
 		let model = smoke_test(model)?;
 		let known = Known::of(&model);
+		if let Err(e) = known.save(&building, name) {
+			eprintln!("admin: cannot write the size of '{}': {}", name, e);
+		}
 		move_model(&building, &self.data_dir, name).map_err(|e| format!("Cannot move the model files: {:?}", e))?;
 		lock(&self.known).insert(name.to_owned(), known);
 		write(generator).map_err(|e| format!("{:?}", e))?.insert_model(model)
@@ -431,6 +624,7 @@ fn dat_names(dir: &Path) -> Result<Vec<String>, AdminError> {
 
 /// Moves the text file and the binary cache of a model from one directory to another.
 /// If the cache cannot follow, the text file goes back, so that the model is never split.
+/// The size file follows if it can: without it, the size is only unknown until the next load.
 fn move_model(from: &Path, to: &Path, name: &str) -> Result<(), AdminError> {
 	std::fs::rename(Catalog::dat(from, name), Catalog::dat(to, name))?;
 	let bin = Catalog::bin(from, name);
@@ -440,12 +634,16 @@ fn move_model(from: &Path, to: &Path, name: &str) -> Result<(), AdminError> {
 		std::fs::rename(Catalog::dat(to, name), Catalog::dat(from, name))?;
 		return Err(e.into());
 	}
+	let stats = Catalog::stats(from, name);
+	if stats.exists() && std::fs::rename(&stats, Catalog::stats(to, name)).is_err() {
+		let _ = std::fs::remove_file(&stats);
+	}
 	Ok(())
 }
 
-/// Removes the text file and the binary cache of a model, the absent ones being ignored.
+/// Removes the text file, the binary cache and the size file of a model, the absent ones being ignored.
 fn remove_model_files(dir: &Path, name: &str) -> Result<(), AdminError> {
-	for path in [Catalog::dat(dir, name), Catalog::bin(dir, name)] {
+	for path in [Catalog::dat(dir, name), Catalog::bin(dir, name), Catalog::stats(dir, name)] {
 		match std::fs::remove_file(&path) {
 			Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
 			_ => (),
@@ -507,6 +705,13 @@ mod tests {
 		fn loaded(&self, name: &str) -> bool {
 			self.generator.read().unwrap().get_model(name).is_some()
 		}
+
+		// Shows a hidden model as the route does, the loading run here instead of on its own thread
+		fn show(&self, name: &str, room: Room, force: bool) -> Result<(), AdminError> {
+			self.catalog.show(name, room, force)?;
+			self.catalog.load(&self.generator, name);
+			Ok(())
+		}
 	}
 
 	#[test]
@@ -533,7 +738,7 @@ mod tests {
 		// Hidden models stay hidden after a restart: `Generator::new` ignores the sub-directories
 		assert!(Generator::new(&f.dir).unwrap().get_model_names().is_empty());
 
-		f.catalog.show(&f.generator, "fruits", Room::default(), false).unwrap();
+		f.show("fruits", Room::default(), false).unwrap();
 		assert_eq!(f.status("fruits"), Some(Status::Shown));
 		assert!(f.loaded("fruits"));
 		assert!(f.dir.join("fruits.dat").exists() && !f.dir.join("hidden/fruits.dat").exists());
@@ -542,7 +747,7 @@ mod tests {
 	#[test]
 	fn hide_and_show_refuse_the_wrong_state() {
 		let f = fixture("wrong-state", &[("fruits", "pomme\n")]);
-		assert!(matches!(f.catalog.show(&f.generator, "fruits", Room::default(), false), Err(AdminError::Conflict(_))));
+		assert!(matches!(f.show("fruits", Room::default(), false), Err(AdminError::Conflict(_))));
 		assert!(matches!(f.catalog.hide(&f.generator, "unknown"), Err(AdminError::NotFound(_))));
 		f.catalog.hide(&f.generator, "fruits").unwrap();
 		assert!(matches!(f.catalog.hide(&f.generator, "fruits"), Err(AdminError::Conflict(_))));
@@ -552,10 +757,10 @@ mod tests {
 	fn show_refuses_a_model_bigger_than_the_free_memory() {
 		let f = fixture("show-memory", &[("fruits", "pomme\npoire\n")]);
 		f.catalog.hide(&f.generator, "fruits").unwrap();
-		let result = f.catalog.show(&f.generator, "fruits", ram(Some(MEMORY_MARGIN_BYTES)), false);
+		let result = f.show("fruits", ram(Some(MEMORY_MARGIN_BYTES)), false);
 		assert!(matches!(result, Err(AdminError::NotEnoughMemory(_))), "{:?}", result);
 		assert_eq!(f.status("fruits"), Some(Status::Hidden));
-		f.catalog.show(&f.generator, "fruits", ram(Some(2 * MEMORY_MARGIN_BYTES)), false).unwrap();
+		f.show("fruits", ram(Some(2 * MEMORY_MARGIN_BYTES)), false).unwrap();
 	}
 
 	#[test]
@@ -563,10 +768,10 @@ mod tests {
 		let f = fixture("show-swap", &[("fruits", "pomme\npoire\n")]);
 		f.catalog.hide(&f.generator, "fruits").unwrap();
 		let room = Room { ram_bytes: Some(MEMORY_MARGIN_BYTES), with_swap_bytes: Some(2 * MEMORY_MARGIN_BYTES) };
-		let result = f.catalog.show(&f.generator, "fruits", room, false);
+		let result = f.show("fruits", room, false);
 		assert!(matches!(result, Err(AdminError::MemoryRisk(_))), "{:?}", result);
 		assert_eq!(f.status("fruits"), Some(Status::Hidden));
-		f.catalog.show(&f.generator, "fruits", room, true).unwrap();
+		f.show("fruits", room, true).unwrap();
 		assert_eq!(f.status("fruits"), Some(Status::Shown));
 		assert!(f.loaded("fruits"));
 	}
@@ -576,7 +781,7 @@ mod tests {
 		let f = fixture("show-too-big", &[("fruits", "pomme\npoire\n")]);
 		f.catalog.hide(&f.generator, "fruits").unwrap();
 		let room = Room { ram_bytes: Some(MEMORY_MARGIN_BYTES), with_swap_bytes: Some(MEMORY_MARGIN_BYTES) };
-		let result = f.catalog.show(&f.generator, "fruits", room, true);
+		let result = f.show("fruits", room, true);
 		assert!(matches!(result, Err(AdminError::NotEnoughMemory(_))), "{:?}", result);
 		assert_eq!(f.status("fruits"), Some(Status::Hidden));
 	}
@@ -599,7 +804,7 @@ mod tests {
 	fn a_reserved_model_is_built_tested_and_shown() {
 		let f = fixture("build", &[("fruits", "pomme\n")]);
 		f.catalog.reserve("legumes", b"chou\ncarotte\n").unwrap();
-		assert_eq!(f.status("legumes"), Some(Status::Building));
+		assert_eq!(f.status("legumes"), Some(Status::Learning));
 		assert!(f.catalog.name_taken("legumes"));
 		f.catalog.build(&f.generator, "legumes");
 		assert_eq!(f.status("legumes"), Some(Status::Shown));
@@ -615,6 +820,107 @@ mod tests {
 		f.catalog.reserve("legumes", b"chou\n").unwrap();
 		assert!(matches!(f.catalog.reserve("fleurs", b"rose\n"), Err(AdminError::Conflict(_))));
 		assert!(matches!(f.catalog.delete(&f.generator, "legumes"), Err(AdminError::Conflict(_))));
+	}
+
+	// Size of a model as the list shows it
+	fn size_of(f: &Fixture, name: &str) -> (Option<ModelStats>, Option<usize>) {
+		let model = f.catalog.list().unwrap().into_iter().find(|model| model.name == name).unwrap();
+		(model.stats, model.transitions)
+	}
+
+	#[test]
+	fn a_hidden_model_keeps_its_size_after_a_restart() {
+		let f = fixture("size-restart", &[("fruits", "pomme\npoire\n")]);
+		let shown = size_of(&f, "fruits");
+		assert!(shown.0.is_some() && f.dir.join("fruits.stats").exists());
+		f.catalog.hide(&f.generator, "fruits").unwrap();
+		assert!(f.dir.join("hidden/fruits.stats").exists() && !f.dir.join("fruits.stats").exists());
+
+		// A restart: the hidden model was never loaded by this catalog
+		let restarted = Fixture {
+			dir: f.dir.clone(),
+			generator: RwLock::new(Generator::new(&f.dir).unwrap()),
+			catalog: Catalog::new(&f.dir, &Generator::new(&f.dir).unwrap()),
+		};
+		assert_eq!(size_of(&restarted, "fruits"), shown);
+		restarted.catalog.delete(&restarted.generator, "fruits").unwrap();
+		assert!(!f.dir.join("hidden/fruits.stats").exists());
+	}
+
+	#[test]
+	fn the_size_file_is_read_back_and_an_unreadable_one_is_ignored() {
+		let f = fixture("size-file", &[]);
+		let size = Known { stats: ModelStats { sentences: 3, sentence_bytes: 15, max_n: 7, states: 42, key_bytes: 99 }, transitions: 50 };
+		size.save(&f.dir, "words").unwrap();
+		assert_eq!(Known::read(&f.dir, "words"), Some(size));
+		std::fs::write(f.dir.join("words.stats"), "sentences 3\nstates x\n").unwrap();
+		assert_eq!(Known::read(&f.dir, "words"), None);
+		assert_eq!(Known::read(&f.dir, "absent"), None);
+	}
+
+	#[test]
+	fn show_lists_the_model_as_loading_until_it_is_loaded() {
+		let f = fixture("show-loading", &[("fruits", "pomme\npoire\n")]);
+		f.catalog.hide(&f.generator, "fruits").unwrap();
+		f.catalog.show("fruits", Room::default(), false).unwrap();
+		assert_eq!(f.status("fruits"), Some(Status::Loading));
+		assert!(!f.loaded("fruits"));
+		// Not twice, and nothing else may take the memory meanwhile
+		assert!(matches!(f.catalog.show("fruits", Room::default(), false), Err(AdminError::Conflict(_))));
+		assert!(matches!(f.catalog.reserve("legumes", b"chou\n"), Err(AdminError::Conflict(_))));
+		assert!(matches!(f.catalog.delete(&f.generator, "fruits"), Err(AdminError::Conflict(_))));
+		f.catalog.load(&f.generator, "fruits");
+		assert_eq!(f.status("fruits"), Some(Status::Shown));
+		assert!(f.loaded("fruits"));
+	}
+
+	#[test]
+	fn show_without_cache_learns_the_model_and_writes_its_cache() {
+		let f = fixture("show-learn", &[("fruits", "pomme\npoire\n")]);
+		f.catalog.hide(&f.generator, "fruits").unwrap();
+		std::fs::remove_file(f.dir.join("hidden/fruits.bin")).unwrap();
+		f.show("fruits", Room::default(), false).unwrap();
+		assert_eq!(f.status("fruits"), Some(Status::Shown));
+		assert!(f.dir.join("fruits.bin").exists());
+	}
+
+	#[test]
+	fn a_failed_show_keeps_the_model_hidden_with_the_reason() {
+		let f = fixture("show-failed", &[("fruits", "pomme\n")]);
+		f.catalog.hide(&f.generator, "fruits").unwrap();
+		std::fs::remove_file(f.dir.join("hidden/fruits.bin")).unwrap();
+		// Not UTF-8: the text cannot be learned
+		std::fs::write(f.dir.join("hidden/fruits.dat"), [0xff, 0xfe]).unwrap();
+		f.show("fruits", Room::default(), false).unwrap();
+		let fruits = f.catalog.list().unwrap().into_iter().find(|model| model.name == "fruits").unwrap();
+		assert_eq!(fruits.status, Status::Hidden);
+		assert!(fruits.error.is_some());
+		assert!(!f.loaded("fruits"));
+		assert!(f.dir.join("hidden/fruits.dat").exists());
+	}
+
+	#[test]
+	fn a_build_blocks_the_show_of_another_model() {
+		let f = fixture("one-at-a-time", &[("fruits", "pomme\n")]);
+		f.catalog.hide(&f.generator, "fruits").unwrap();
+		f.catalog.reserve("legumes", b"chou\n").unwrap();
+		assert!(matches!(f.catalog.show("fruits", Room::default(), false), Err(AdminError::Conflict(_))));
+		f.catalog.build(&f.generator, "legumes");
+		f.show("fruits", Room::default(), false).unwrap();
+		assert_eq!(f.status("fruits"), Some(Status::Shown));
+	}
+
+	#[test]
+	fn learning_tells_the_share_of_the_lines_learned() {
+		let f = fixture("progress", &[]);
+		let dat = f.dir.join("words.dat");
+		std::fs::write(&dat, "a\nb\nc\n").unwrap();
+		let progress = Arc::new(LearnProgress::default());
+		let job = Job { step: Step::Learning(Arc::clone(&progress)), adding: true };
+		// The file is not read yet: no share
+		assert_eq!(job.describe(), (Status::Learning, None, None));
+		MultiGramModel::learn_file(&dat, &progress).unwrap();
+		assert_eq!(job.describe(), (Status::Learning, Some(1.0), None));
 	}
 
 	#[test]

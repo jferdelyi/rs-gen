@@ -35,4 +35,4 @@ Learning needs more memory than loading. Measured on an Apple M1 Pro: `english.d
 - With the admin page (`simple-web-front/admin.html`): the file is checked (format, memory), learned in the background, then shown, without restarting the server.
 - By hand: add `<name>.dat` to this directory and restart the server.
 
-The model then appears in `GET /v1/models` and can be weighted with `intensity=<name>:<value>`. On the server, the admin page keeps the hidden models in `hidden/` and builds the new ones in `building/`: the server reads only the files directly in this directory.
+The model then appears in `GET /v1/models` and can be weighted with `intensity=<name>:<value>`. On the server, the admin page keeps the hidden models in `hidden/` and builds the new ones in `building/`: the server reads only the `.dat` files directly in this directory. Next to each model, a `<name>.stats` file keeps its size once it was loaded (not versioned).

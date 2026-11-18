@@ -7,6 +7,7 @@ use std::fs::File;
 use std::hash::{DefaultHasher, Hasher};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 pub(crate) const START_CHAR: char = '<';
@@ -20,6 +21,27 @@ const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-4\n";
 /// Buffer that holds one string at a time while the cache is decoded: far longer than
 /// any prefix or sentence. A longer string makes the cache unreadable, hence rebuilt.
 const CACHE_SCRATCH_BYTES: usize = 64 * 1024;
+
+/// Lines learned between two updates of a `LearnProgress`: the shared counter is touched
+/// once per batch, not once per line.
+const PROGRESS_STEP: usize = 1024;
+
+/// Progress of `MultiGramModel::learn_file`, readable from another thread while it runs.
+#[derive(Debug, Default)]
+pub struct LearnProgress {
+	/// Lines learned so far.
+	done: AtomicUsize,
+
+	/// Lines of the text file, 0 until the file is read.
+	total: AtomicUsize,
+}
+
+impl LearnProgress {
+	/// Returns the lines learned so far and the lines of the text file (0 until it is read).
+	pub fn lines(&self) -> (usize, usize) {
+		(self.done.load(Ordering::Relaxed), self.total.load(Ordering::Relaxed))
+	}
+}
 
 /// Size of a model, as built from its text file.
 ///
@@ -146,19 +168,50 @@ impl MultiGramModel {
 	/// # Notes
 	/// - Uses a binary cache (`postcard`) for faster loading if available.
 	/// - A cache without the current `CACHE_HEADER`, or a damaged one, is rebuilt from the text file.
+	/// - Runs `from_cache`, or else `learn_file` then `save_cache`: these steps can also be
+	///   called one by one, to tell which one is running.
 	pub fn new<P: AsRef<Path>>(filepath: P) -> Result<Self, Box<dyn std::error::Error>> {
-		let binary_data_path = build_output_path(&filepath, "bin")?;
-		let mut model = match Self::read_cache(&binary_data_path) {
-			Some(model) => model,
-			// No cache, a cache written with another layout, or a damaged one
-			None => {
-				let model = Self::read_database_file(&filepath)?;
-				model.write_cache(&binary_data_path)?;
-				model
-			}
+		if let Some(model) = Self::from_cache(&filepath)? {
+			return Ok(model);
+		}
+		// No cache, a cache written with another layout, or a damaged one
+		let model = Self::learn_file(&filepath, &LearnProgress::default())?;
+		model.save_cache(&filepath)?;
+		Ok(model)
+	}
+
+	/// Reads the model of the text file `filepath` from its binary cache, the `.bin` file next to it.
+	///
+	/// # Returns
+	/// - `Ok(None)` if there is no cache, or a cache written with another layout, or a damaged one.
+	/// - `Err` if the path has no file name.
+	pub fn from_cache<P: AsRef<Path>>(filepath: P) -> Result<Option<Self>, Box<dyn std::error::Error>> {
+		let Some(mut model) = Self::read_cache(&build_output_path(&filepath, "bin")?) else {
+			return Ok(None);
 		};
 		model.name = get_filename(filepath)?;
+		Ok(Some(model))
+	}
+
+	/// Builds the model of the text file `filepath` from its lines, without reading or writing the cache.
+	///
+	/// `progress` counts the lines learned, to be read from another thread while the model is built.
+	///
+	/// # Errors
+	/// Returns an error if the file cannot be read.
+	pub fn learn_file<P: AsRef<Path>>(filepath: P, progress: &LearnProgress) -> Result<Self, Box<dyn std::error::Error>> {
+		let mut model = Self::read_database_file(&filepath, progress)?;
+		model.name = get_filename(filepath)?;
 		Ok(model)
+	}
+
+	/// Writes the binary cache of the model next to its text file `filepath`, as the `.bin` file
+	/// that `from_cache` reads.
+	///
+	/// # Errors
+	/// Returns an error if the cache cannot be written.
+	pub fn save_cache<P: AsRef<Path>>(&self, filepath: P) -> Result<(), Box<dyn std::error::Error>> {
+		self.write_cache(&build_output_path(&filepath, "bin")?)
 	}
 
 	/// Reads the binary cache, streamed from the file: the cache is never held whole in memory.
@@ -191,18 +244,19 @@ impl MultiGramModel {
 
 	/// Reads a raw text file and learns its lines, in parallel when the machine has
 	/// several processors: one partial model per processor, merged into the final model.
-	fn read_database_file<P: AsRef<Path>>(filename: P) -> Result<MultiGramModel, Box<dyn std::error::Error>> {
+	fn read_database_file<P: AsRef<Path>>(filename: P, progress: &LearnProgress) -> Result<MultiGramModel, Box<dyn std::error::Error>> {
 		let text = std::fs::read_to_string(filename)?;
 		let lines: Vec<&str> = text.lines().collect();
+		progress.total.store(lines.len(), Ordering::Relaxed);
 		// More partial models than processors would only repeat the prefixes they share
 		let threads = num_cpus::get().clamp(1, lines.len().max(1));
 
 		let mut final_model = if threads == 1 {
-			Self::learn(&lines)
+			Self::learn(&lines, progress)
 		} else {
 			let chunk_size = lines.len().div_ceil(threads);
 			thread::scope(|scope| {
-				let learners: Vec<_> = lines.chunks(chunk_size).map(|chunk| scope.spawn(move || Self::learn(chunk))).collect();
+				let learners: Vec<_> = lines.chunks(chunk_size).map(|chunk| scope.spawn(move || Self::learn(chunk, progress))).collect();
 				let mut partial_models = learners.into_iter().map(|learner| learner.join().expect("a learning thread panicked"));
 				let mut final_model = partial_models.next().unwrap_or_else(MultiGramModel::default);
 				for partial_model in partial_models {
@@ -215,11 +269,14 @@ impl MultiGramModel {
 		Ok(final_model)
 	}
 
-	/// Learns every line into a new model.
-	fn learn(lines: &[&str]) -> Self {
+	/// Learns every line into a new model, adding the lines learned to `progress` batch by batch.
+	fn learn(lines: &[&str], progress: &LearnProgress) -> Self {
 		let mut model = Self::default();
-		for line in lines {
-			model.add_sentence(line);
+		for batch in lines.chunks(PROGRESS_STEP) {
+			for line in batch {
+				model.add_sentence(line);
+			}
+			progress.done.fetch_add(batch.len(), Ordering::Relaxed);
 		}
 		model
 	}
@@ -670,10 +727,45 @@ mod tests {
 		let text: String = (0..2000).map(|i| format!("w{}x{}\n", i % 37, i % 101)).collect();
 		let dir = test_dir("parallel-build");
 		std::fs::write(dir.join("words.dat"), &text).unwrap();
-		let built = MultiGramModel::read_database_file(dir.join("words.dat")).unwrap();
+		let built = MultiGramModel::read_database_file(dir.join("words.dat"), &LearnProgress::default()).unwrap();
 		let learned = model_of(&text);
 		assert_eq!(built.dump(), learned.dump());
 		assert_eq!(built.stats(), learned.stats());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn learn_file_counts_every_line() {
+		// More lines than one progress batch, over several processors
+		let text: String = (0..PROGRESS_STEP * 3 + 7).map(|i| format!("w{}\n", i)).collect();
+		let dir = test_dir("learn-progress");
+		let dat = dir.join("words.dat");
+		std::fs::write(&dat, &text).unwrap();
+		let progress = LearnProgress::default();
+		assert_eq!(progress.lines(), (0, 0));
+		let model = MultiGramModel::learn_file(&dat, &progress).unwrap();
+		assert_eq!(progress.lines(), (PROGRESS_STEP * 3 + 7, PROGRESS_STEP * 3 + 7));
+		assert_eq!(model.get_name(), "words");
+		assert_eq!(model.dump(), model_of(&text).dump());
+		// Learning does not write the cache
+		assert!(!dir.join("words.bin").exists());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn from_cache_reads_what_save_cache_wrote() {
+		let dir = test_dir("cache-steps");
+		let dat = dir.join("words.dat");
+		std::fs::write(&dat, "ab\nPomme\n").unwrap();
+		assert!(MultiGramModel::from_cache(&dat).unwrap().is_none());
+		let learned = MultiGramModel::learn_file(&dat, &LearnProgress::default()).unwrap();
+		learned.save_cache(&dat).unwrap();
+		let loaded = MultiGramModel::from_cache(&dat).unwrap().expect("the cache was just written");
+		assert_eq!(loaded.get_name(), "words");
+		assert_eq!(loaded.dump(), learned.dump());
+		assert_eq!(loaded.stats(), learned.stats());
+		// `new` reads the same cache
+		assert_eq!(MultiGramModel::new(&dat).unwrap().dump(), learned.dump());
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 
