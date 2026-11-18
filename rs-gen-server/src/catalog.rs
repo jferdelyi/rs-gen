@@ -16,7 +16,7 @@ use crate::system::Room;
 use rs_gen_core::model::generator::Generator;
 use rs_gen_core::model::multigram_model::{LearnProgress, ModelStats, MultiGramModel};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockWriteGuard};
 use std::time::UNIX_EPOCH;
@@ -175,9 +175,6 @@ enum Step {
 struct Job {
 	/// What it is doing.
 	step: Step,
-
-	/// True for an addition, false for a hidden model being shown.
-	adding: bool,
 }
 
 impl Job {
@@ -266,55 +263,50 @@ impl Catalog {
 		dir.join(format!("{}.stats", name))
 	}
 
-	/// Lists every model: shown, hidden, on its way or failed, sorted by name.
+	/// Lists every model: shown, hidden, on its way or failed, sorted by name, each one once.
+	///
+	/// A model on its way moves between two directories: a list read during the move may
+	/// find it in both or in neither. Its job then gives its status, and it is listed once.
 	pub(crate) fn list(&self) -> Result<Vec<ModelInfo>, AdminError> {
 		// Copied, not held: the other actions lock `jobs` before `known`
 		let known = lock(&self.known).clone();
 		let jobs = lock(&self.jobs).clone();
 		let errors = lock(&self.errors).clone();
+		let (data_dir, hidden_dir, building_dir) = (self.data_dir.clone(), self.hidden_dir(), self.building_dir());
+		let mut names: BTreeSet<String> = jobs.keys().cloned().collect();
+		names.extend(dat_names(&data_dir)?);
+		names.extend(dat_names(&hidden_dir)?);
+
 		let mut models = Vec::new();
-		for (dir, on_disk) in [(self.data_dir.clone(), Status::Shown), (self.hidden_dir(), Status::Hidden)] {
-			for name in dat_names(&dir)? {
-				let size = known.get(&name).copied().or_else(|| Known::read(&dir, &name));
-				let (status, progress, error) = match jobs.get(&name) {
-					// A hidden model being shown
-					Some(job) => job.describe(),
-					None => (on_disk, None, errors.get(&name).cloned()),
-				};
-				let dat = std::fs::metadata(Self::dat(&dir, &name)).ok();
-				models.push(ModelInfo {
-					status,
-					progress,
-					error,
-					stats: size.map(|size| size.stats),
-					transitions: size.map(|size| size.transitions),
-					estimated_bytes: size.map(|size| size.stats.estimated_bytes()),
-					dat_bytes: dat.as_ref().map(|metadata| metadata.len()),
-					bin_bytes: std::fs::metadata(Self::bin(&dir, &name)).ok().map(|metadata| metadata.len()),
-					modified: dat
-						.and_then(|metadata| metadata.modified().ok())
-						.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-						.map(|duration| duration.as_secs()),
-					name,
-				});
-			}
-		}
-		for (name, job) in jobs.iter().filter(|(_, job)| job.adding) {
-			let (status, progress, error) = job.describe();
+		for name in names {
+			// Where its files are now, if anywhere
+			let dir = [&data_dir, &hidden_dir, &building_dir].into_iter().find(|dir| Self::dat(dir, &name).exists());
+			let (status, progress, error) = match (jobs.get(&name), dir) {
+				(Some(job), _) => job.describe(),
+				(None, Some(dir)) if *dir == data_dir => (Status::Shown, None, None),
+				(None, Some(dir)) if *dir == hidden_dir => (Status::Hidden, None, errors.get(&name).cloned()),
+				// Moved or deleted since the directory was read, or a file left in `building/`
+				(None, _) => continue,
+			};
+			let dir = dir.unwrap_or(&data_dir);
+			let size = known.get(&name).copied().or_else(|| Known::read(dir, &name));
+			let dat = std::fs::metadata(Self::dat(dir, &name)).ok();
 			models.push(ModelInfo {
-				name: name.clone(),
 				status,
 				progress,
 				error,
-				stats: None,
-				transitions: None,
-				estimated_bytes: None,
-				dat_bytes: std::fs::metadata(Self::dat(&self.building_dir(), name)).ok().map(|metadata| metadata.len()),
-				bin_bytes: None,
-				modified: None,
+				stats: size.map(|size| size.stats),
+				transitions: size.map(|size| size.transitions),
+				estimated_bytes: size.map(|size| size.stats.estimated_bytes()),
+				dat_bytes: dat.as_ref().map(|metadata| metadata.len()),
+				bin_bytes: std::fs::metadata(Self::bin(dir, &name)).ok().map(|metadata| metadata.len()),
+				modified: dat
+					.and_then(|metadata| metadata.modified().ok())
+					.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+					.map(|duration| duration.as_secs()),
+				name,
 			});
 		}
-		models.sort_by(|a, b| a.name.cmp(&b.name));
 		Ok(models)
 	}
 
@@ -416,7 +408,7 @@ impl Catalog {
 			}
 		}
 
-		jobs.insert(name.to_owned(), Job { step: Step::Loading, adding: false });
+		jobs.insert(name.to_owned(), Job { step: Step::Loading });
 		lock(&self.errors).remove(name);
 		Ok(())
 	}
@@ -539,7 +531,7 @@ impl Catalog {
 		// A cache left by an interrupted build would be read instead of the new text
 		remove_model_files(&building, name)?;
 		std::fs::write(Self::dat(&building, name), bytes)?;
-		jobs.insert(name.to_owned(), Job { step: Step::Learning(Arc::new(LearnProgress::default())), adding: true });
+		jobs.insert(name.to_owned(), Job { step: Step::Learning(Arc::new(LearnProgress::default())) });
 		Ok(())
 	}
 
@@ -556,7 +548,7 @@ impl Catalog {
 			Err(error) => {
 				eprintln!("admin: model '{}' not built: {}", name, error);
 				let _ = remove_model_files(&self.building_dir(), name);
-				jobs.insert(name.to_owned(), Job { step: Step::Failed(error), adding: true });
+				jobs.insert(name.to_owned(), Job { step: Step::Failed(error) });
 			}
 		}
 	}
@@ -564,7 +556,7 @@ impl Catalog {
 	/// Gives up a reserved model whose build could not start: it is listed as failed.
 	pub(crate) fn abandon(&self, name: &str, error: String) {
 		let _ = remove_model_files(&self.building_dir(), name);
-		lock(&self.jobs).insert(name.to_owned(), Job { step: Step::Failed(error), adding: true });
+		lock(&self.jobs).insert(name.to_owned(), Job { step: Step::Failed(error) });
 	}
 
 	/// Steps of `build` that can fail.
@@ -899,6 +891,34 @@ mod tests {
 		assert!(f.dir.join("hidden/fruits.dat").exists());
 	}
 
+	// The entries of the list named `name`
+	fn entries(f: &Fixture, name: &str) -> Vec<ModelInfo> {
+		f.catalog.list().unwrap().into_iter().filter(|model| model.name == name).collect()
+	}
+
+	#[test]
+	fn a_model_moving_out_of_hidden_is_still_listed() {
+		// A list read during the move may find the text file in neither directory
+		let f = fixture("list-moving", &[("fruits", "pomme\n")]);
+		f.catalog.hide(&f.generator, "fruits").unwrap();
+		f.catalog.show("fruits", Room::default(), false).unwrap();
+		std::fs::rename(f.dir.join("hidden/fruits.dat"), f.dir.join("fruits.moving")).unwrap();
+		let listed = entries(&f, "fruits");
+		assert_eq!(listed.len(), 1, "{:?}", listed);
+		assert_eq!(listed[0].status, Status::Loading);
+	}
+
+	#[test]
+	fn a_model_moving_into_data_is_listed_once() {
+		// At the end of an addition, the files are in `data/` before the job ends
+		let f = fixture("list-twice", &[]);
+		f.catalog.reserve("legumes", b"chou\n").unwrap();
+		std::fs::copy(f.dir.join("building/legumes.dat"), f.dir.join("legumes.dat")).unwrap();
+		let listed = entries(&f, "legumes");
+		assert_eq!(listed.len(), 1, "{:?}", listed);
+		assert_eq!(listed[0].status, Status::Learning);
+	}
+
 	#[test]
 	fn a_build_blocks_the_show_of_another_model() {
 		let f = fixture("one-at-a-time", &[("fruits", "pomme\n")]);
@@ -916,7 +936,7 @@ mod tests {
 		let dat = f.dir.join("words.dat");
 		std::fs::write(&dat, "a\nb\nc\n").unwrap();
 		let progress = Arc::new(LearnProgress::default());
-		let job = Job { step: Step::Learning(Arc::clone(&progress)), adding: true };
+		let job = Job { step: Step::Learning(Arc::clone(&progress)) };
 		// The file is not read yet: no share
 		assert_eq!(job.describe(), (Status::Learning, None, None));
 		MultiGramModel::learn_file(&dat, &progress).unwrap();
