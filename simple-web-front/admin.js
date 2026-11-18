@@ -113,7 +113,7 @@ const STATUS_LABELS = {
     shown: "Shown",
     hidden: "Hidden",
     learning: "Learning",
-    saving: "Saving the cache",
+    saving: "Saving the model file",
     testing: "Testing",
     loading: "Loading",
     failed: "Failed"
@@ -283,7 +283,7 @@ function modelCard(model) {
         ["Max n", formatNumber(model.stats?.max_n)],
         ["Memory (estimate)", model.estimated_bytes === null ? "not loaded" : formatBytes(model.estimated_bytes)],
         ["Text file", formatBytes(model.dat_bytes)],
-        ["Cache", formatBytes(model.bin_bytes)],
+        ["Model file", formatBytes(model.bin_bytes)],
         ["Modified", formatDate(model.modified)]
     ]) {
         const pair = document.createElement("div");
