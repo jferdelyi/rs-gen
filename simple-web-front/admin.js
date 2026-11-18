@@ -30,6 +30,7 @@ const updated = document.getElementById("updated");
 const memory = document.getElementById("memory");
 const models = document.getElementById("models");
 const modelsError = document.getElementById("models-error");
+const modelsMessage = document.getElementById("models-message");
 
 const addHint = document.getElementById("add-hint");
 const modelFile = document.getElementById("model-file");
@@ -46,6 +47,13 @@ const deleteConfirm = document.getElementById("delete-confirm");
 const deleteError = document.getElementById("delete-error");
 const deleteBtn = document.getElementById("delete-btn");
 const cancelDeleteBtn = document.getElementById("cancel-delete-btn");
+
+const renameModal = document.getElementById("rename-modal");
+const renameName = document.getElementById("rename-name");
+const renameNew = document.getElementById("rename-new");
+const renameError = document.getElementById("rename-error");
+const renameBtn = document.getElementById("rename-btn");
+const cancelRenameBtn = document.getElementById("cancel-rename-btn");
 
 const passwordForm = document.getElementById("password-form");
 const currentPassword = document.getElementById("current-password");
@@ -65,6 +73,8 @@ let checked = null;
 let addedModel = null;
 // Model waiting for the delete confirmation
 let modelToDelete = null;
+// Model being renamed
+let modelToRename = null;
 
 /* =============================
    Formatting
@@ -278,6 +288,9 @@ function modelCard(model) {
     } else if (model.status === "hidden") {
         actions.appendChild(actionButton("Show", "Load it again into the generator, if the memory allows it", () => runAction(model.name, "show")));
     }
+    if (model.status === "shown" || model.status === "hidden") {
+        actions.appendChild(actionButton("Rename", "Give the model another name", () => openRename(model.name)));
+    }
     if (!ON_THE_WAY.has(model.status)) {
         actions.appendChild(actionButton("Delete", "Delete its files for good", () => openDelete(model.name), "danger-btn"));
     }
@@ -334,6 +347,7 @@ async function loadModels() {
 // `force` is sent once the admin accepted that the model fits only by using swap
 async function runAction(name, action, force = false) {
     showMessage(modelsError, "");
+    showMessage(modelsMessage, "");
     try {
         const query = force ? "?force=true" : "";
         const { status, ok, data } = await api("POST", `/models/${encodeURIComponent(name)}/${action}${query}`);
@@ -359,6 +373,72 @@ refreshBtn.addEventListener("click", async () => {
         await loadModels();
     } finally {
         refreshBtn.disabled = false;
+    }
+});
+
+/* =============================
+   Rename
+============================= */
+// Same rule as the server: 1 to 64 lowercase letters, digits, '_' or '-', starting with a letter or a digit
+const VALID_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+function openRename(name) {
+    modelToRename = name;
+    renameName.textContent = name;
+    renameNew.value = name;
+    renameBtn.disabled = true;
+    showMessage(renameError, "");
+    showMessage(modelsMessage, "");
+    renameModal.classList.remove("hidden");
+    renameNew.focus();
+    renameNew.select();
+}
+
+function closeRename() {
+    modelToRename = null;
+    renameModal.classList.add("hidden");
+}
+
+function updateRenameButton() {
+    const name = renameNew.value;
+    renameBtn.disabled = !VALID_NAME.test(name) || name === modelToRename;
+    showMessage(renameError, name !== "" && !VALID_NAME.test(name)
+        ? "Use 1 to 64 lowercase letters, digits, '_' or '-', starting with a letter or a digit"
+        : "");
+}
+
+renameNew.addEventListener("input", updateRenameButton);
+renameNew.addEventListener("keydown", event => {
+    if (event.key === "Enter" && !renameBtn.disabled) {
+        renameBtn.click();
+    }
+});
+cancelRenameBtn.addEventListener("click", closeRename);
+renameModal.addEventListener("mousedown", event => {
+    if (event.target === renameModal) {
+        closeRename();
+    }
+});
+
+renameBtn.addEventListener("click", async () => {
+    const name = modelToRename;
+    const newName = renameNew.value;
+    renameBtn.disabled = true;
+    try {
+        const { ok, data } = await api("POST", `/models/${encodeURIComponent(name)}/rename`, { new_name: newName });
+        if (!ok) {
+            showMessage(renameError, data.error);
+            renameBtn.disabled = false;
+            return;
+        }
+        closeRename();
+        showMessage(modelsMessage, `'${name}' is now '${newName}'.`);
+        await loadModels();
+    } catch (error) {
+        if (!(error instanceof LoginRequired)) {
+            showMessage(renameError, `The server cannot be reached: ${error.message}`);
+            renameBtn.disabled = false;
+        }
     }
 });
 

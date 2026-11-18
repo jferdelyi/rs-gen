@@ -101,6 +101,11 @@ pub(crate) fn is_valid_name(name: &str) -> bool {
 		&& name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
+/// Message for a name that `is_valid_name` refuses.
+pub(crate) fn invalid_name_message() -> String {
+	format!("Invalid name: use 1 to {} lowercase letters, digits, '_' or '-', starting with a letter or a digit", MAX_NAME_CHARS)
+}
+
 /// Formats a number of bytes for a message, in megabytes, as the admin page does.
 pub(crate) fn megabytes(bytes: u64) -> String {
 	if bytes > 0 && bytes < 10_000 {
@@ -130,10 +135,7 @@ pub(crate) fn check_upload(name: &str, name_taken: bool, bytes: &[u8], room: Roo
 	};
 
 	if !is_valid_name(name) {
-		report.problems.push(format!(
-			"Invalid name: use 1 to {} lowercase letters, digits, '_' or '-', starting with a letter or a digit",
-			MAX_NAME_CHARS
-		));
+		report.problems.push(invalid_name_message());
 	} else if name_taken {
 		report.problems.push(format!("A model named '{}' already exists", name));
 	}

@@ -10,7 +10,7 @@ Library holding all the generation logic: learning character-level n-gram models
 | `src/io.rs` | File helpers: list the `.dat` files of a directory, build the `.bin` path, name a model after its file. |
 | `src/hash.rs` | Fast hasher (multiply-rotate) for the internal tables, faster than SipHash on short keys. |
 | `src/model/mod.rs` | Declares the model modules. |
-| `src/model/generator.rs` | `Generator`: loads every `.dat` of a directory, adds or removes a model while it is used, draws the models by weight, generates a word, retries when the word already exists. |
+| `src/model/generator.rs` | `Generator`: loads every `.dat` of a directory, adds, removes or renames a model while it is used, draws the models by weight, generates a word, retries when the word already exists. |
 | `src/model/prediction_input.rs` | `PredictionInput` and `StartSeed`: generation parameters and model weights. |
 | `src/model/multigram_model.rs` | `MultiGramModel`: one model per training file, made of one `NGramModel` per order, its sentences, and its binary cache. `new` loads a model in one call; `from_cache`, `learn_file` (with a `LearnProgress` that counts the lines learned) and `save_cache` are its steps, to tell which one runs. `ModelStats` gives its size and estimated memory; `count_text` gives the same statistics from a text, without learning it. |
 | `src/model/ngram_model.rs` | `NGramModel`: the states of one order n, keyed by their prefix of n - 1 characters. |

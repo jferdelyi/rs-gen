@@ -7,7 +7,7 @@ REST API exposing the generator of `rs-gen-core`, built with actix-web. The publ
 | File | Role |
 |---|---|
 | `src/main.rs` | Loads the models of `./data` at startup, serves `GET /v1/generate` and `GET /v1/models` on `127.0.0.1:5000`, registers the admin routes. `rs-gen-server hash-password` prints the hash of a password instead. |
-| `src/admin.rs` | Admin routes under `/v1/admin`: login, logout, password change, list, check, add, hide, show, delete. |
+| `src/admin.rs` | Admin routes under `/v1/admin`: login, logout, password change, list, check, add, hide, show, rename, delete. |
 | `src/auth.rs` | Password hash (Argon2id) and its change, sessions, limit of the login attempts. |
 | `src/catalog.rs` | Model files of `data/` and their status (shown, hidden, learning, saving, testing, loading, failed): moves, deletions, background builds and loads, size files. |
 | `src/check.rs` | Checks a text file before it becomes a model: name, content, memory. |
@@ -63,6 +63,7 @@ Every admin request carries the header `X-Rs-Gen-Admin: 1`. Every route but `log
 | `POST /v1/admin/models?name=<name>[&force=true]`, the text file as body | Checks the file again, then builds the model in the background; it is shown once it generates words. `force=true` accepts a model that fits only by using swap. | `202` with the report |
 | `POST /v1/admin/models/<name>/hide` | Unloads the model and moves its files to `data/hidden/`. | `200` |
 | `POST /v1/admin/models/<name>/show[?force=true]` | Loads the model in the background, if the memory allows it, then moves its files back to `data/`; `force=true` accepts a model that fits only by using swap. A failed load leaves the model hidden, with the reason. | `202` |
+| `POST /v1/admin/models/<name>/rename` with `{"new_name": "..."}` | Renames a shown or hidden model and its files; a shown model is generated under its new name at once. An invalid name or the current one: `400`; a taken name, or a model on its way or failed: `409`. | `200` |
 | `DELETE /v1/admin/models/<name>` with `{"confirm": "<name>"}` | Deletes the model and its files for good. | `200` |
 
 Without a session: `401`. Without the header: `403`. A failed check: `422` with the report. A model that fits only by using swap, without `force=true`: `422` (with `"forceable": true` for `show`). A name taken, or another model being added or shown: `409`.
@@ -118,7 +119,7 @@ A model on its way goes through these statuses, one model at a time:
 cargo test -p rs-gen-server
 ```
 
-The tests call the routes through actix-web, on temporary data directories: each admin route without a session or without the header, login, wrong passwords and their limit, the life of a model (check, add, hide, show, delete), names made of paths, the statuses of a model on its way (learning with its share, saving, testing, loading, a failed show that keeps the model hidden, one model at a time), its size kept after a restart, the change of password (saved, other sessions closed, wrong current password counted, short new password refused), and with fixed memory figures the forced addition and display of a model that fits only by using swap, and the refusal of one that does not fit even with swap.
+The tests call the routes through actix-web, on temporary data directories: each admin route without a session or without the header, login, wrong passwords and their limit, the life of a model (check, add, hide, show, delete), names made of paths, the statuses of a model on its way (learning with its share, saving, testing, loading, a failed show that keeps the model hidden, one model at a time), its size kept after a restart, the renaming of a shown or hidden model, the change of password (saved, other sessions closed, wrong current password counted, short new password refused), and with fixed memory figures the forced addition and display of a model that fits only by using swap, and the refusal of one that does not fit even with swap.
 
 ## Building for a Linux server
 

@@ -180,6 +180,20 @@ impl Generator {
 		self.models.get(name)
 	}
 
+	/// Renames a loaded model: it is then generated and weighted under `new_name`.
+	///
+	/// # Errors
+	/// Returns an error if no model is named `name`, or if a model is already named `new_name`.
+	pub fn rename_model(&mut self, name: &str, new_name: &str) -> Result<(), String> {
+		if self.models.contains_key(new_name) {
+			return Err(format!("Model already loaded: {}", new_name));
+		}
+		let mut model = self.models.remove(name).ok_or_else(|| format!("Model {} not found", name))?;
+		model.set_name(new_name);
+		self.models.insert(new_name.to_owned(), model);
+		Ok(())
+	}
+
 	/// Creates a new `PredictionInput` with default intensity for all models.
 	///
 	/// Probabilities are automatically normalized.
@@ -574,6 +588,32 @@ mod tests {
 		assert!(generator.remove_model("low").is_none());
 		let input = generator.make_prediction_input();
 		assert!(generator.predict(&input).is_err());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn rename_model_moves_the_model_to_its_new_name() {
+		let (mut generator, dir) = generator_with("rename", &[("low", "abc\n"), ("up", "xyz\n")]);
+		generator.rename_model("low", "lower").unwrap();
+		let mut names = generator.get_model_names();
+		names.sort();
+		assert_eq!(names, vec!["lower", "up"]);
+		assert_eq!(generator.get_model("lower").map(MultiGramModel::get_name), Some("lower"));
+		// Weighted under its new name only
+		let mut input = generator.make_prediction_input();
+		input.set_model_intensity("lower", 1.0).unwrap();
+		assert!(input.set_model_intensity("low", 1.0).is_err());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn rename_model_refuses_a_taken_or_unknown_name() {
+		let (mut generator, dir) = generator_with("rename-refused", &[("low", "abc\n"), ("up", "xyz\n")]);
+		assert!(generator.rename_model("low", "up").is_err());
+		assert!(generator.rename_model("none", "other").is_err());
+		// Nothing moved
+		assert!(generator.get_model("low").unwrap().check_if_exists("abc"));
+		assert!(generator.get_model("up").unwrap().check_if_exists("xyz"));
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 }

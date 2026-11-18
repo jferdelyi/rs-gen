@@ -38,6 +38,7 @@ pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
 					.route("/models/check", web::post().to(check_model))
 					.route("/models/{name}/hide", web::post().to(hide_model))
 					.route("/models/{name}/show", web::post().to(show_model))
+					.route("/models/{name}/rename", web::post().to(rename_model))
 					.route("/models/{name}", web::delete().to(delete_model)),
 			),
 	);
@@ -441,6 +442,47 @@ async fn show_model(state: web::Data<AppState>, path: web::Path<String>, query: 
 	}
 }
 
+/// Body of `POST /v1/admin/models/{name}/rename`.
+#[derive(Deserialize)]
+struct RenameBody {
+	/// The new name of the model.
+	new_name: String,
+}
+
+/// `POST /v1/admin/models/{name}/rename` with `{"new_name": "..."}`: renames a shown or hidden
+/// model and its files. A shown model is generated under its new name at once: a generation
+/// that still names the old one is refused until its page reads the list of models again.
+///
+/// # Returns
+/// - 200 OK: the model is renamed
+/// - 400 Bad Request: an invalid name, or the current one
+/// - 404 Not Found: no model has this name
+/// - 409 Conflict: the new name is taken, or the model is on its way or failed
+async fn rename_model(state: web::Data<AppState>, path: web::Path<String>, body: web::Json<RenameBody>) -> HttpResponse {
+	let name = path.into_inner();
+	let new_name = body.into_inner().new_name;
+	if !check::is_valid_name(&name) {
+		return error_response(StatusCode::BAD_REQUEST, "Invalid model name");
+	}
+	if !check::is_valid_name(&new_name) {
+		return error_response(StatusCode::BAD_REQUEST, &check::invalid_name_message());
+	}
+	if new_name == name {
+		return error_response(StatusCode::BAD_REQUEST, "The new name is the current one");
+	}
+	let renamed = web::block(move || {
+		state.catalog.rename(&state.generator, &name, &new_name)?;
+		eprintln!("admin: model '{}' renamed to '{}'", name, new_name);
+		Ok(())
+	})
+	.await;
+	match renamed {
+		Ok(Ok(())) => HttpResponse::Ok().json(Done { ok: true }),
+		Ok(Err(error)) => admin_error(&error),
+		Err(_) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "The action was interrupted"),
+	}
+}
+
 /// Body of `DELETE /v1/admin/models/{name}`.
 #[derive(Deserialize)]
 struct DeleteBody {
@@ -579,6 +621,7 @@ mod tests {
 		("POST", "/v1/admin/models/check?name=fruits"),
 		("POST", "/v1/admin/models/fruits/hide"),
 		("POST", "/v1/admin/models/fruits/show"),
+		("POST", "/v1/admin/models/fruits/rename"),
 		("DELETE", "/v1/admin/models/fruits"),
 		("GET", "/v1/admin/unknown"),
 	];
@@ -881,6 +924,41 @@ mod tests {
 		assert!(!report.ok);
 		assert!(!report.problems.is_empty());
 		assert!(!dir.join("legumes.dat").exists());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[derive(Serialize)]
+	struct NewName<'a> {
+		new_name: &'a str,
+	}
+
+	#[actix_web::test]
+	async fn a_model_is_renamed_and_generated_under_its_new_name() {
+		let (state, dir) = state("rename", &[("fruits", "pomme\npoire\n"), ("legumes", "chou\n")], true);
+		let app = test::init_service(App::new().app_data(state).configure(crate::configure)).await;
+		let cookie = login_cookie!(&app);
+		let rename = |name: &str, new_name: &str| {
+			admin("POST", &format!("/v1/admin/models/{}/rename", name)).cookie(cookie.clone()).set_json(NewName { new_name }).to_request()
+		};
+
+		let response = test::call_service(&app, rename("fruits", "vergers")).await;
+		assert_eq!(response.status(), StatusCode::OK);
+		assert!(dir.join("vergers.dat").exists() && dir.join("vergers.bin").exists() && !dir.join("fruits.dat").exists());
+		let public = to_bytes(test::call_service(&app, TestRequest::get().uri("/v1/models").to_request()).await.into_body()).await.unwrap();
+		let mut names: Vec<&str> = std::str::from_utf8(&public).unwrap().lines().collect();
+		names.sort_unstable();
+		assert_eq!(names, vec!["legumes", "vergers"]);
+		let response = test::call_service(&app, TestRequest::get().uri("/v1/generate?intensity=vergers:1").to_request()).await;
+		assert_eq!(response.status(), StatusCode::OK);
+		// The old name is gone
+		let response = test::call_service(&app, TestRequest::get().uri("/v1/generate?intensity=fruits:1").to_request()).await;
+		assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+		// Refused: an invalid name, the current one, a taken one, an unknown model
+		assert_eq!(test::call_service(&app, rename("vergers", "Vergers!")).await.status(), StatusCode::BAD_REQUEST);
+		assert_eq!(test::call_service(&app, rename("vergers", "vergers")).await.status(), StatusCode::BAD_REQUEST);
+		assert_eq!(test::call_service(&app, rename("vergers", "legumes")).await.status(), StatusCode::CONFLICT);
+		assert_eq!(test::call_service(&app, rename("absent", "autre")).await.status(), StatusCode::NOT_FOUND);
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 

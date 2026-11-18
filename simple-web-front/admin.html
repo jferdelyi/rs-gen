@@ -60,6 +60,7 @@
         <h3>Models</h3>
         <div id="models" class="model-cards"></div>
         <p id="models-error" class="message message-error hidden"></p>
+        <p id="models-message" class="message message-success hidden"></p>
       </div>
 
       <div class="card">
@@ -123,6 +124,26 @@
       <div class="button-row">
         <button id="delete-btn" class="danger-btn fixed-btn" disabled>Delete the model</button>
         <button id="cancel-delete-btn" class="action-btn fixed-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rename -->
+  <div id="rename-modal" class="hidden modal">
+    <div class="modal-content">
+      <h3>Rename <span id="rename-name"></span></h3>
+      <p class="message message-warning">
+        The generator page of a visitor shows the model under its new name once it reads the list
+        of models again. The API URLs that name the old one stop working, and the weight a visitor
+        saved for it in the browser is lost.
+      </p>
+      <label for="rename-new" class="label-title">New name</label>
+      <input type="text" id="rename-new" maxlength="64" autocomplete="off" spellcheck="false"
+             title="1 to 64 lowercase letters, digits, '_' or '-', starting with a letter or a digit">
+      <p id="rename-error" class="message message-error hidden"></p>
+      <div class="button-row">
+        <button id="rename-btn" class="primary-btn fixed-btn" disabled>Rename</button>
+        <button id="cancel-rename-btn" class="action-btn fixed-btn">Cancel</button>
       </div>
     </div>
   </div>
