@@ -6,7 +6,8 @@
 //! - A hidden model being shown is loaded from `data/hidden/`, then moved to `data/`.
 //!
 //! Next to each model, `<name>.stats` keeps its size once it was loaded, so that a hidden
-//! model still shows its figures after a restart.
+//! model still shows its figures after a restart, and `<name>.label` its display name, if any:
+//! the name shown to the visitors, while the technical name stays the same.
 //!
 //! `Generator::new` reads only the `.dat` files directly in `data/`: the sub-directories and
 //! the other files are ignored.
@@ -74,6 +75,9 @@ pub(crate) enum Status {
 pub(crate) struct ModelInfo {
 	/// Name of the model.
 	pub(crate) name: String,
+
+	/// Display name of the model, if any.
+	pub(crate) label: Option<String>,
 
 	/// Status of the model.
 	pub(crate) status: Status,
@@ -263,6 +267,60 @@ impl Catalog {
 		dir.join(format!("{}.stats", name))
 	}
 
+	/// Display name file of the model `name` in `dir`.
+	fn label(dir: &Path, name: &str) -> PathBuf {
+		dir.join(format!("{}.label", name))
+	}
+
+	/// Reads the display name of the model `name` of `dir`, `None` if it has none.
+	fn read_label(dir: &Path, name: &str) -> Option<String> {
+		let label = std::fs::read_to_string(Self::label(dir, name)).ok()?;
+		let label = label.trim();
+		(!label.is_empty()).then(|| label.to_owned())
+	}
+
+	/// Writes the display name of the model `name` of `dir`, or removes it for `None`.
+	fn write_label(dir: &Path, name: &str, label: Option<&str>) -> std::io::Result<()> {
+		let path = Self::label(dir, name);
+		match label {
+			Some(label) => {
+				let temporary = path.with_extension("label.tmp");
+				std::fs::write(&temporary, format!("{}\n", label))?;
+				std::fs::rename(&temporary, &path)
+			}
+			None => match std::fs::remove_file(&path) {
+				Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+				_ => Ok(()),
+			},
+		}
+	}
+
+	/// Display names of the shown models, by name: what the generator page shows.
+	pub(crate) fn labels(&self) -> HashMap<String, String> {
+		dat_names(&self.data_dir)
+			.unwrap_or_default()
+			.into_iter()
+			.filter_map(|name| Self::read_label(&self.data_dir, &name).map(|label| (name, label)))
+			.collect()
+	}
+
+	/// Gives a display name to a shown or hidden model, or removes it for `None`.
+	///
+	/// # Errors
+	/// Returns a conflict if the model is on its way or failed, not found if no model has this name.
+	pub(crate) fn set_label(&self, name: &str, label: Option<&str>) -> Result<(), AdminError> {
+		let jobs = lock(&self.jobs);
+		if jobs.contains_key(name) {
+			return Err(AdminError::Conflict(format!("The model '{}' is being added or shown, or its addition failed: wait for it to end", name)));
+		}
+		let dir = [self.data_dir.clone(), self.hidden_dir()]
+			.into_iter()
+			.find(|dir| Self::dat(dir, name).exists())
+			.ok_or_else(|| AdminError::NotFound(format!("No model named '{}'", name)))?;
+		Self::write_label(&dir, name, label)?;
+		Ok(())
+	}
+
 	/// Lists every model: shown, hidden, on its way or failed, sorted by name, each one once.
 	///
 	/// A model on its way moves between two directories: a list read during the move may
@@ -292,6 +350,7 @@ impl Catalog {
 			let size = known.get(&name).copied().or_else(|| Known::read(dir, &name));
 			let dat = std::fs::metadata(Self::dat(dir, &name)).ok();
 			models.push(ModelInfo {
+				label: Self::read_label(dir, &name),
 				status,
 				progress,
 				error,
@@ -518,7 +577,7 @@ impl Catalog {
 	/// # Errors
 	/// Returns a conflict if the name is taken or if another model is being added or shown:
 	/// one at a time, each one takes much memory.
-	pub(crate) fn reserve(&self, name: &str, bytes: &[u8]) -> Result<(), AdminError> {
+	pub(crate) fn reserve(&self, name: &str, bytes: &[u8], label: Option<&str>) -> Result<(), AdminError> {
 		let mut jobs = lock(&self.jobs);
 		if jobs.values().any(Job::running) {
 			return Err(Self::busy());
@@ -531,6 +590,7 @@ impl Catalog {
 		// A cache left by an interrupted build would be read instead of the new text
 		remove_model_files(&building, name)?;
 		std::fs::write(Self::dat(&building, name), bytes)?;
+		Self::write_label(&building, name, label)?;
 		jobs.insert(name.to_owned(), Job { step: Step::Learning(Arc::new(LearnProgress::default())) });
 		Ok(())
 	}
@@ -617,6 +677,7 @@ fn dat_names(dir: &Path) -> Result<Vec<String>, AdminError> {
 /// Moves the text file and the binary cache of a model from one directory to another.
 /// If the cache cannot follow, the text file goes back, so that the model is never split.
 /// The size file follows if it can: without it, the size is only unknown until the next load.
+/// The display name follows too; if it cannot, it stays where it was and the move is logged.
 fn move_model(from: &Path, to: &Path, name: &str) -> Result<(), AdminError> {
 	std::fs::rename(Catalog::dat(from, name), Catalog::dat(to, name))?;
 	let bin = Catalog::bin(from, name);
@@ -630,12 +691,19 @@ fn move_model(from: &Path, to: &Path, name: &str) -> Result<(), AdminError> {
 	if stats.exists() && std::fs::rename(&stats, Catalog::stats(to, name)).is_err() {
 		let _ = std::fs::remove_file(&stats);
 	}
+	let label = Catalog::label(from, name);
+	if label.exists()
+		&& let Err(e) = std::fs::rename(&label, Catalog::label(to, name))
+	{
+		eprintln!("admin: the display name of '{}' did not follow the model: {}", name, e);
+	}
 	Ok(())
 }
 
-/// Removes the text file, the binary cache and the size file of a model, the absent ones being ignored.
+/// Removes the text file, the binary cache, the size file and the display name of a model,
+/// the absent ones being ignored.
 fn remove_model_files(dir: &Path, name: &str) -> Result<(), AdminError> {
-	for path in [Catalog::dat(dir, name), Catalog::bin(dir, name), Catalog::stats(dir, name)] {
+	for path in [Catalog::dat(dir, name), Catalog::bin(dir, name), Catalog::stats(dir, name), Catalog::label(dir, name)] {
 		match std::fs::remove_file(&path) {
 			Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
 			_ => (),
@@ -778,6 +846,59 @@ mod tests {
 		assert_eq!(f.status("fruits"), Some(Status::Hidden));
 	}
 
+	// The display name of `name` in the list
+	fn label_of(f: &Fixture, name: &str) -> Option<String> {
+		f.catalog.list().unwrap().into_iter().find(|model| model.name == name).and_then(|model| model.label)
+	}
+
+	#[test]
+	fn a_display_name_is_saved_listed_and_removed() {
+		let f = fixture("label", &[("fruits", "pomme\n")]);
+		f.catalog.set_label("fruits", Some("Fruits d'été")).unwrap();
+		assert_eq!(label_of(&f, "fruits").as_deref(), Some("Fruits d'été"));
+		assert_eq!(f.catalog.labels().get("fruits").map(String::as_str), Some("Fruits d'été"));
+		// The technical name stays the same
+		assert!(f.loaded("fruits") && f.dir.join("fruits.dat").exists());
+		f.catalog.set_label("fruits", None).unwrap();
+		assert_eq!(label_of(&f, "fruits"), None);
+		assert!(!f.dir.join("fruits.label").exists());
+		assert!(f.catalog.labels().is_empty());
+	}
+
+	#[test]
+	fn the_display_name_follows_the_model_and_goes_with_it() {
+		let f = fixture("label-moves", &[("fruits", "pomme\n")]);
+		f.catalog.set_label("fruits", Some("Fruits")).unwrap();
+		f.catalog.hide(&f.generator, "fruits").unwrap();
+		assert!(f.dir.join("hidden/fruits.label").exists());
+		assert_eq!(label_of(&f, "fruits").as_deref(), Some("Fruits"));
+		// Only the shown models reach the generator page
+		assert!(f.catalog.labels().is_empty());
+		f.show("fruits", Room::default(), false).unwrap();
+		assert_eq!(f.catalog.labels().get("fruits").map(String::as_str), Some("Fruits"));
+		f.catalog.delete(&f.generator, "fruits").unwrap();
+		assert!(!f.dir.join("fruits.label").exists());
+	}
+
+	#[test]
+	fn a_new_model_keeps_the_display_name_given_at_its_addition() {
+		let f = fixture("label-added", &[]);
+		f.catalog.reserve("legumes", b"chou\n", Some("Légumes")).unwrap();
+		assert_eq!(label_of(&f, "legumes").as_deref(), Some("Légumes"));
+		f.catalog.build(&f.generator, "legumes");
+		assert_eq!(f.status("legumes"), Some(Status::Shown));
+		assert_eq!(label_of(&f, "legumes").as_deref(), Some("Légumes"));
+		assert!(f.dir.join("legumes.label").exists());
+	}
+
+	#[test]
+	fn set_label_refuses_a_model_on_its_way_or_unknown() {
+		let f = fixture("label-refused", &[]);
+		f.catalog.reserve("legumes", b"chou\n", None).unwrap();
+		assert!(matches!(f.catalog.set_label("legumes", Some("Légumes")), Err(AdminError::Conflict(_))));
+		assert!(matches!(f.catalog.set_label("absent", Some("Absent")), Err(AdminError::NotFound(_))));
+	}
+
 	#[test]
 	fn delete_removes_a_shown_or_hidden_model_for_good() {
 		let f = fixture("delete", &[("fruits", "pomme\n"), ("legumes", "chou\n")]);
@@ -795,7 +916,7 @@ mod tests {
 	#[test]
 	fn a_reserved_model_is_built_tested_and_shown() {
 		let f = fixture("build", &[("fruits", "pomme\n")]);
-		f.catalog.reserve("legumes", b"chou\ncarotte\n").unwrap();
+		f.catalog.reserve("legumes", b"chou\ncarotte\n", None).unwrap();
 		assert_eq!(f.status("legumes"), Some(Status::Learning));
 		assert!(f.catalog.name_taken("legumes"));
 		f.catalog.build(&f.generator, "legumes");
@@ -808,9 +929,9 @@ mod tests {
 	#[test]
 	fn reserve_refuses_a_taken_name_and_a_second_build() {
 		let f = fixture("reserve", &[("fruits", "pomme\n")]);
-		assert!(matches!(f.catalog.reserve("fruits", b"x\n"), Err(AdminError::Conflict(_))));
-		f.catalog.reserve("legumes", b"chou\n").unwrap();
-		assert!(matches!(f.catalog.reserve("fleurs", b"rose\n"), Err(AdminError::Conflict(_))));
+		assert!(matches!(f.catalog.reserve("fruits", b"x\n", None), Err(AdminError::Conflict(_))));
+		f.catalog.reserve("legumes", b"chou\n", None).unwrap();
+		assert!(matches!(f.catalog.reserve("fleurs", b"rose\n", None), Err(AdminError::Conflict(_))));
 		assert!(matches!(f.catalog.delete(&f.generator, "legumes"), Err(AdminError::Conflict(_))));
 	}
 
@@ -859,7 +980,7 @@ mod tests {
 		assert!(!f.loaded("fruits"));
 		// Not twice, and nothing else may take the memory meanwhile
 		assert!(matches!(f.catalog.show("fruits", Room::default(), false), Err(AdminError::Conflict(_))));
-		assert!(matches!(f.catalog.reserve("legumes", b"chou\n"), Err(AdminError::Conflict(_))));
+		assert!(matches!(f.catalog.reserve("legumes", b"chou\n", None), Err(AdminError::Conflict(_))));
 		assert!(matches!(f.catalog.delete(&f.generator, "fruits"), Err(AdminError::Conflict(_))));
 		f.catalog.load(&f.generator, "fruits");
 		assert_eq!(f.status("fruits"), Some(Status::Shown));
@@ -912,7 +1033,7 @@ mod tests {
 	fn a_model_moving_into_data_is_listed_once() {
 		// At the end of an addition, the files are in `data/` before the job ends
 		let f = fixture("list-twice", &[]);
-		f.catalog.reserve("legumes", b"chou\n").unwrap();
+		f.catalog.reserve("legumes", b"chou\n", None).unwrap();
 		std::fs::copy(f.dir.join("building/legumes.dat"), f.dir.join("legumes.dat")).unwrap();
 		let listed = entries(&f, "legumes");
 		assert_eq!(listed.len(), 1, "{:?}", listed);
@@ -923,7 +1044,7 @@ mod tests {
 	fn a_build_blocks_the_show_of_another_model() {
 		let f = fixture("one-at-a-time", &[("fruits", "pomme\n")]);
 		f.catalog.hide(&f.generator, "fruits").unwrap();
-		f.catalog.reserve("legumes", b"chou\n").unwrap();
+		f.catalog.reserve("legumes", b"chou\n", None).unwrap();
 		assert!(matches!(f.catalog.show("fruits", Room::default(), false), Err(AdminError::Conflict(_))));
 		f.catalog.build(&f.generator, "legumes");
 		f.show("fruits", Room::default(), false).unwrap();
@@ -946,7 +1067,7 @@ mod tests {
 	#[test]
 	fn a_failed_build_is_listed_and_can_be_deleted() {
 		let f = fixture("failed", &[]);
-		f.catalog.reserve("bad", b"x\n").unwrap();
+		f.catalog.reserve("bad", b"x\n", None).unwrap();
 		// The text file vanishes before the build
 		std::fs::remove_file(f.dir.join("building/bad.dat")).unwrap();
 		f.catalog.build(&f.generator, "bad");

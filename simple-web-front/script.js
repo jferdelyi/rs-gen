@@ -144,6 +144,16 @@ function bindSliders() {
 /* =============================
    Models Loader
 ============================= */
+// Display names of the models, by name: none if the server does not give them
+async function loadLabels() {
+    try {
+        const response = await fetch(`${BASE_URL}/v1/labels`);
+        return response.ok ? await response.json() : {};
+    } catch {
+        return {};
+    }
+}
+
 async function loadModels() {
     try {
         const response = await fetch(`${BASE_URL}/v1/models`);
@@ -153,6 +163,7 @@ async function loadModels() {
             .filter(Boolean);
 
         const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || defaultSettings;
+        const labels = await loadLabels();
 
         modelContainer.innerHTML = "";
 
@@ -162,7 +173,8 @@ async function loadModels() {
 
             const label = document.createElement("label");
             label.className = "label-title";
-            label.textContent = model;
+            // The display name for the visitor; the API keeps the technical name
+            label.textContent = labels[model] || model;
 
             const row = document.createElement("div");
             row.className = "slider-inline";
@@ -174,7 +186,7 @@ async function loadModels() {
             slider.step = 0.1;
             slider.dataset.model = model;
             slider.value = saved.models?.[model] ?? 100;
-            slider.title = `Adjust the weight of model "${model}"`;
+            slider.title = `Adjust the weight of model "${labels[model] || model}"`;
 
             const valueSpan = document.createElement("span");
             valueSpan.className = "slider-value";

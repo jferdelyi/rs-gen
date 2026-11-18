@@ -15,8 +15,9 @@ target
 
 *.bin
 
-# Size files written next to the models by rs-gen-server
+# Size and display name files written next to the models by rs-gen-server
 *.stats
+*.label
 
 # RustRover
 # Covers JetBrains IDEs: IntelliJ, GoLand, RubyMine, PhpStorm, AppCode, PyCharm, CLion, Android Studio, WebStorm and Rider

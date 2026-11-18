@@ -30,10 +30,12 @@ const updated = document.getElementById("updated");
 const memory = document.getElementById("memory");
 const models = document.getElementById("models");
 const modelsError = document.getElementById("models-error");
+const modelsMessage = document.getElementById("models-message");
 
 const addHint = document.getElementById("add-hint");
 const modelFile = document.getElementById("model-file");
 const modelName = document.getElementById("model-name");
+const modelLabel = document.getElementById("model-label");
 const checkBtn = document.getElementById("check-btn");
 const addBtn = document.getElementById("add-btn");
 const forceRow = document.getElementById("force-row");
@@ -46,6 +48,16 @@ const deleteConfirm = document.getElementById("delete-confirm");
 const deleteError = document.getElementById("delete-error");
 const deleteBtn = document.getElementById("delete-btn");
 const cancelDeleteBtn = document.getElementById("cancel-delete-btn");
+
+const labelModal = document.getElementById("label-modal");
+const labelName = document.getElementById("label-name");
+const labelInput = document.getElementById("label-input");
+const labelError = document.getElementById("label-error");
+const labelBtn = document.getElementById("label-btn");
+const cancelLabelBtn = document.getElementById("cancel-label-btn");
+
+// Longest display name accepted by the server, in characters
+const MAX_LABEL_CHARS = 64;
 
 const passwordForm = document.getElementById("password-form");
 const currentPassword = document.getElementById("current-password");
@@ -65,6 +77,8 @@ let checked = null;
 let addedModel = null;
 // Model waiting for the delete confirmation
 let modelToDelete = null;
+// Model whose display name is being changed
+let modelToLabel = null;
 
 /* =============================
    Formatting
@@ -254,7 +268,13 @@ function modelCard(model) {
         status.title = model.error;
         status.classList.add("status-error");
     }
-    head.append(element("h4", "model-name", model.name), status);
+    // The display name as title, the technical name under it
+    const title = element("div", "model-card-title");
+    title.appendChild(element("h4", "model-name", model.label || model.name));
+    if (model.label) {
+        title.appendChild(element("span", "model-id", model.name));
+    }
+    head.append(title, status);
 
     const figures = element("dl", "model-figures");
     for (const [label, value] of [
@@ -279,6 +299,9 @@ function modelCard(model) {
         actions.appendChild(actionButton("Show", "Load it again into the generator, if the memory allows it", () => runAction(model.name, "show")));
     }
     if (!ON_THE_WAY.has(model.status)) {
+        if (model.status === "shown" || model.status === "hidden") {
+            actions.appendChild(actionButton("Display name", "Give the model a name for the visitors; its technical name stays the same", () => openLabel(model)));
+        }
         actions.appendChild(actionButton("Delete", "Delete its files for good", () => openDelete(model.name), "danger-btn"));
     }
     if (actions.children.length > 0) {
@@ -334,6 +357,7 @@ async function loadModels() {
 // `force` is sent once the admin accepted that the model fits only by using swap
 async function runAction(name, action, force = false) {
     showMessage(modelsError, "");
+    showMessage(modelsMessage, "");
     try {
         const query = force ? "?force=true" : "";
         const { status, ok, data } = await api("POST", `/models/${encodeURIComponent(name)}/${action}${query}`);
@@ -359,6 +383,78 @@ refreshBtn.addEventListener("click", async () => {
         await loadModels();
     } finally {
         refreshBtn.disabled = false;
+    }
+});
+
+/* =============================
+   Display name
+============================= */
+// Same rule as the server: at most 64 characters once trimmed, no control character
+function labelProblem(label) {
+    if ([...label.trim()].length > MAX_LABEL_CHARS) {
+        return `At most ${MAX_LABEL_CHARS} characters`;
+    }
+    if (/\p{Cc}/u.test(label)) {
+        return "No line break, tab or other control character";
+    }
+    return "";
+}
+
+function openLabel(model) {
+    modelToLabel = model.name;
+    labelName.textContent = model.name;
+    labelInput.value = model.label || "";
+    showMessage(labelError, "");
+    showMessage(modelsMessage, "");
+    labelBtn.disabled = false;
+    labelModal.classList.remove("hidden");
+    labelInput.focus();
+    labelInput.select();
+}
+
+function closeLabel() {
+    modelToLabel = null;
+    labelModal.classList.add("hidden");
+}
+
+labelInput.addEventListener("input", () => {
+    const problem = labelProblem(labelInput.value);
+    showMessage(labelError, problem);
+    labelBtn.disabled = problem !== "";
+});
+labelInput.addEventListener("keydown", event => {
+    if (event.key === "Enter" && !labelBtn.disabled) {
+        labelBtn.click();
+    }
+});
+cancelLabelBtn.addEventListener("click", closeLabel);
+labelModal.addEventListener("mousedown", event => {
+    if (event.target === labelModal) {
+        closeLabel();
+    }
+});
+
+labelBtn.addEventListener("click", async () => {
+    const name = modelToLabel;
+    const label = labelInput.value.trim();
+    labelBtn.disabled = true;
+    try {
+        const { ok, data } = await api("POST", `/models/${encodeURIComponent(name)}/label`, { label });
+        if (!ok) {
+            showMessage(labelError, data.error);
+            labelBtn.disabled = false;
+            return;
+        }
+        closeLabel();
+        showMessage(modelsMessage, label
+            ? `'${name}' is shown as '${label}'.`
+            : `'${name}' shows its technical name again.`);
+        await loadModels();
+    } catch (error) {
+        if (!(error instanceof LoginRequired)) {
+            showMessage(labelError, `The server cannot be reached: ${error.message}`);
+            labelBtn.disabled = false;
+        }
     }
 });
 
@@ -537,7 +633,9 @@ addBtn.addEventListener("click", async () => {
     addBtn.disabled = true;
     checkBtn.disabled = true;
     try {
-        const query = `name=${encodeURIComponent(name)}${force ? "&force=true" : ""}`;
+        const label = modelLabel.value.trim();
+        const query = `name=${encodeURIComponent(name)}${force ? "&force=true" : ""}`
+            + (label ? `&label=${encodeURIComponent(label)}` : "");
         const { status, data } = await api("POST", `/models?${query}`, file);
         if (status === 202) {
             addedModel = name;
@@ -548,6 +646,7 @@ addBtn.addEventListener("click", async () => {
             report.classList.remove("hidden");
             modelFile.value = "";
             modelName.value = "";
+            modelLabel.value = "";
             forgetCheck();
         } else if (status === 422) {
             renderReport(data, "The model cannot be added");

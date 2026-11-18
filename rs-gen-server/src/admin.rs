@@ -38,6 +38,7 @@ pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
 					.route("/models/check", web::post().to(check_model))
 					.route("/models/{name}/hide", web::post().to(hide_model))
 					.route("/models/{name}/show", web::post().to(show_model))
+					.route("/models/{name}/label", web::post().to(set_label))
 					.route("/models/{name}", web::delete().to(delete_model)),
 			),
 	);
@@ -302,6 +303,10 @@ struct NameQuery {
 	/// Adds the model even if it fits only by using swap (never if it has a problem).
 	#[serde(default)]
 	force: bool,
+
+	/// Display name of the new model, if any (`POST /v1/admin/models` only).
+	#[serde(default)]
+	label: Option<String>,
 }
 
 /// Query of `POST /v1/admin/models/{name}/show`.
@@ -347,13 +352,17 @@ enum Addition {
 /// - 422 Unprocessable Content with the check report: the check failed, or found a risk without `force`
 /// - 409 Conflict if the name is taken or another model is being built
 async fn add_model(state: web::Data<AppState>, query: web::Query<NameQuery>, body: web::Bytes) -> HttpResponse {
+	let NameQuery { name, force, label } = query.into_inner();
+	let label = match label.as_deref().map(check::check_label).transpose() {
+		Ok(label) => label.flatten(),
+		Err(message) => return error_response(StatusCode::BAD_REQUEST, &message),
+	};
 	let addition = web::block(move || {
-		let NameQuery { name, force } = query.into_inner();
 		let report = check(&state, &name, &body);
 		if !report.problems.is_empty() || (!report.risks.is_empty() && !force) {
 			return Addition::Refused(report);
 		}
-		if let Err(error) = state.catalog.reserve(&name, &body) {
+		if let Err(error) = state.catalog.reserve(&name, &body, label.as_deref()) {
 			return Addition::Failed(error);
 		}
 		let (builder, built) = (state.clone(), name.clone());
@@ -439,6 +448,31 @@ async fn show_model(state: web::Data<AppState>, path: web::Path<String>, query: 
 		Ok(Err(error)) => admin_error(&error),
 		Err(_) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "The action was interrupted"),
 	}
+}
+
+/// Body of `POST /v1/admin/models/{name}/label`.
+#[derive(Deserialize)]
+struct LabelBody {
+	/// The display name; empty to show the technical name again.
+	label: String,
+}
+
+/// `POST /v1/admin/models/{name}/label` with `{"label": "..."}`: gives a shown or hidden model a
+/// display name, shown instead of its technical name. The technical name stays the same, in the
+/// API too. An empty display name removes it.
+///
+/// # Returns
+/// - 200 OK: the display name is saved
+/// - 400 Bad Request: a display name too long or with a control character
+/// - 404 Not Found: no model has this name
+/// - 409 Conflict: the model is on its way or failed
+async fn set_label(state: web::Data<AppState>, path: web::Path<String>, body: web::Json<LabelBody>) -> HttpResponse {
+	let label = match check::check_label(&body.label) {
+		Ok(label) => label,
+		Err(message) => return error_response(StatusCode::BAD_REQUEST, &message),
+	};
+	let verb = if label.is_some() { "given a display name" } else { "shown under its technical name" };
+	run_action(state, path.into_inner(), verb, move |state, name| state.catalog.set_label(name, label.as_deref())).await
 }
 
 /// Body of `DELETE /v1/admin/models/{name}`.
@@ -579,6 +613,7 @@ mod tests {
 		("POST", "/v1/admin/models/check?name=fruits"),
 		("POST", "/v1/admin/models/fruits/hide"),
 		("POST", "/v1/admin/models/fruits/show"),
+		("POST", "/v1/admin/models/fruits/label"),
 		("DELETE", "/v1/admin/models/fruits"),
 		("GET", "/v1/admin/unknown"),
 	];
@@ -881,6 +916,50 @@ mod tests {
 		assert!(!report.ok);
 		assert!(!report.problems.is_empty());
 		assert!(!dir.join("legumes.dat").exists());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[derive(Serialize)]
+	struct Label<'a> {
+		label: &'a str,
+	}
+
+	#[actix_web::test]
+	async fn a_display_name_is_given_and_served_to_the_generator_page() {
+		let (state, dir) = state("label", &[("fruits", "pomme\npoire\n")], true);
+		let app = test::init_service(App::new().app_data(state).configure(crate::configure)).await;
+		let cookie = login_cookie!(&app);
+		let label = |name: &str, label: &str| {
+			admin("POST", &format!("/v1/admin/models/{}/label", name)).cookie(cookie.clone()).set_json(Label { label }).to_request()
+		};
+		let public_labels = || TestRequest::get().uri("/v1/labels").to_request();
+
+		let response = test::call_service(&app, label("fruits", "  Fruits d'été ")).await;
+		assert_eq!(response.status(), StatusCode::OK);
+		let labels: std::collections::HashMap<String, String> = test::read_body_json(test::call_service(&app, public_labels()).await).await;
+		assert_eq!(labels.get("fruits").map(String::as_str), Some("Fruits d'été"));
+		// The generation still names the model by its technical name
+		let response = test::call_service(&app, TestRequest::get().uri("/v1/generate?intensity=fruits:1").to_request()).await;
+		assert_eq!(response.status(), StatusCode::OK);
+
+		// Refused: a line break, an unknown model
+		assert_eq!(test::call_service(&app, label("fruits", "two\nlines")).await.status(), StatusCode::BAD_REQUEST);
+		assert_eq!(test::call_service(&app, label("absent", "Absent")).await.status(), StatusCode::NOT_FOUND);
+
+		// An empty display name shows the technical name again
+		assert_eq!(test::call_service(&app, label("fruits", "")).await.status(), StatusCode::OK);
+		let labels: std::collections::HashMap<String, String> = test::read_body_json(test::call_service(&app, public_labels()).await).await;
+		assert!(labels.is_empty());
+
+		// A display name given at the addition
+		let response = test::call_service(&app, admin("POST", "/v1/admin/models?name=legumes&label=L%C3%A9gumes%20verts").cookie(cookie.clone()).set_payload("chou\ncarotte\n").to_request()).await;
+		assert_eq!(response.status(), StatusCode::ACCEPTED);
+		assert_eq!(wait_build!(&app, cookie, "legumes"), "shown");
+		let labels: std::collections::HashMap<String, String> = test::read_body_json(test::call_service(&app, public_labels()).await).await;
+		assert_eq!(labels.get("legumes").map(String::as_str), Some("Légumes verts"));
+		let response = test::call_service(&app, admin("POST", "/v1/admin/models?name=fleurs&label=a%0Ab").cookie(cookie).set_payload("rose\n").to_request()).await;
+		assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+		assert!(!dir.join("fleurs.dat").exists() && !dir.join("building/fleurs.dat").exists());
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 

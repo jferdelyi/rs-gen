@@ -29,6 +29,9 @@ const MIN_BYTES_PER_STATE: u64 = 64;
 /// Longest model name.
 const MAX_NAME_CHARS: usize = 64;
 
+/// Longest display name of a model, in characters.
+pub(crate) const MAX_LABEL_CHARS: usize = 64;
+
 /// Result of a check, sent to the admin page.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CheckReport {
@@ -99,6 +102,29 @@ pub(crate) fn is_valid_name(name: &str) -> bool {
 	chars.next().is_some_and(|first| first.is_ascii_lowercase() || first.is_ascii_digit())
 		&& name.len() <= MAX_NAME_CHARS
 		&& name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+/// Checks the display name of a model: any characters but control ones (a line break, a tab),
+/// at most `MAX_LABEL_CHARS` once trimmed.
+///
+/// # Returns
+/// - `Ok(None)` for an empty name: the model shows its technical name.
+/// - `Ok(Some(label))` for the trimmed name.
+///
+/// # Errors
+/// Returns the message to show for a name too long or with a control character.
+pub(crate) fn check_label(label: &str) -> Result<Option<String>, String> {
+	let label = label.trim();
+	if label.is_empty() {
+		return Ok(None);
+	}
+	if label.chars().count() > MAX_LABEL_CHARS {
+		return Err(format!("The display name has more than {} characters", MAX_LABEL_CHARS));
+	}
+	if label.chars().any(char::is_control) {
+		return Err("The display name holds a line break, a tab or another control character".to_owned());
+	}
+	Ok(Some(label.to_owned()))
 }
 
 /// Formats a number of bytes for a message, in megabytes, as the admin page does.
@@ -284,6 +310,17 @@ mod tests {
 			"2 empty lines: each one is learned as an empty word",
 			"2 lines contain '<' or '>', which mark the start and the end of a word",
 		]);
+	}
+
+	#[test]
+	fn check_label_keeps_a_human_name_and_refuses_control_characters() {
+		assert_eq!(check_label("  Fromages de France  "), Ok(Some("Fromages de France".to_owned())));
+		assert_eq!(check_label("Élfes & Fées"), Ok(Some("Élfes & Fées".to_owned())));
+		assert_eq!(check_label("   "), Ok(None));
+		assert_eq!(check_label(&"é".repeat(MAX_LABEL_CHARS)), Ok(Some("é".repeat(MAX_LABEL_CHARS))));
+		assert!(check_label(&"é".repeat(MAX_LABEL_CHARS + 1)).is_err());
+		assert!(check_label("two\nlines").is_err());
+		assert!(check_label("a\ttab").is_err());
 	}
 
 	#[test]

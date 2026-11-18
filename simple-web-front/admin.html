@@ -60,6 +60,7 @@
         <h3>Models</h3>
         <div id="models" class="model-cards"></div>
         <p id="models-error" class="message message-error hidden"></p>
+        <p id="models-message" class="message message-success hidden"></p>
       </div>
 
       <div class="card">
@@ -72,6 +73,10 @@
           <label for="model-name" class="label-title">Model name</label>
           <input type="text" id="model-name" maxlength="64" autocomplete="off" spellcheck="false"
                  title="1 to 64 lowercase letters, digits, '_' or '-', starting with a letter or a digit">
+
+          <label for="model-label" class="label-title">Display name</label>
+          <input type="text" id="model-label" maxlength="64" autocomplete="off"
+                 placeholder="Optional: the name shown to the visitors">
         </div>
         <label id="force-row" class="force-row hidden">
           <input type="checkbox" id="force-add">
@@ -106,6 +111,24 @@
         </div>
       </div>
 
+    </div>
+  </div>
+
+  <!-- Display name -->
+  <div id="label-modal" class="hidden modal">
+    <div class="modal-content">
+      <h3>Display name of <span id="label-name"></span></h3>
+      <p class="hint">
+        Shown to the visitors instead of the technical name, which stays the same, in the API too.
+        Leave it empty to show the technical name.
+      </p>
+      <label for="label-input" class="label-title">Display name</label>
+      <input type="text" id="label-input" maxlength="64" autocomplete="off">
+      <p id="label-error" class="message message-error hidden"></p>
+      <div class="button-row">
+        <button id="label-btn" class="primary-btn fixed-btn">Save</button>
+        <button id="cancel-label-btn" class="action-btn fixed-btn">Cancel</button>
+      </div>
     </div>
   </div>
 

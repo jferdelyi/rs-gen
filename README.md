@@ -165,9 +165,19 @@ http://127.0.0.1:5000/v1/models
 
 ---
 
+#### `GET /v1/labels`
+
+Returns the display names of the shown models, as a JSON object by model name, for instance `{"fromage": "Fromages de France"}`. A model without display name is not listed. The display name is only shown to the visitors: `intensity` and the other routes still use the model name.
+
+```
+http://127.0.0.1:5000/v1/labels
+```
+
+---
+
 #### Admin routes (`/v1/admin/...`)
 
-Password-protected routes to manage the models while the server runs: list them with their size and the memory of the server, check a text file, add it as a new model, hide a model (unloaded, files kept), show it again, delete it. They stay disabled until an admin password hash is configured. See [rs-gen-server/README.md](rs-gen-server/README.md#admin) for the setup and the routes.
+Password-protected routes to manage the models while the server runs: list them with their size and the memory of the server, check a text file, add it as a new model, hide a model (unloaded, files kept), show it again, give it a display name, delete it. They stay disabled until an admin password hash is configured. See [rs-gen-server/README.md](rs-gen-server/README.md#admin) for the setup and the routes.
 
 ---
 

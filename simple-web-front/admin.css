@@ -203,9 +203,22 @@ input.visually-hidden {
   gap: 8px;
 }
 
+/* The display name, and the technical name under it */
+.model-card-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .model-card-head h4 {
   margin: 0;
   font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.model-id {
+  color: #57606a;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 

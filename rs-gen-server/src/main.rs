@@ -199,9 +199,19 @@ async fn get_models(data: web::Data<AppState>) -> impl Responder {
 	HttpResponse::Ok().body(generator.get_model_names().join("\n"))
 }
 
+/// HTTP GET `/v1/labels` endpoint
+///
+/// Returns the display names of the loaded models, as a JSON object by model name: the generator
+/// page shows them instead of the names. A model without display name is not listed, and the
+/// generation still names the models by their name.
+#[get("/v1/labels")]
+async fn get_labels(data: web::Data<AppState>) -> impl Responder {
+	HttpResponse::Ok().json(data.catalog.labels())
+}
+
 /// Registers every route: the public ones and the admin ones.
 pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
-	cfg.service(get_generated).service(get_models).configure(admin::configure);
+	cfg.service(get_generated).service(get_models).service(get_labels).configure(admin::configure);
 }
 
 /// Main entry point for the Actix web server
