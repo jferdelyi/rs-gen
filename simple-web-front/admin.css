@@ -179,10 +179,10 @@ input.visually-hidden {
 /* =========================
    Models table
 ========================= */
-/* One card per model, as many per row as the width allows */
+/* One card per model, as many per row as the width allows; wide enough for its three buttons */
 .model-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
   gap: 12px;
 }
 
@@ -237,6 +237,11 @@ input.visually-hidden {
 
 .model-figures div {
   min-width: 0;
+}
+
+/* The date on one line, across the card */
+.model-figures .wide {
+  grid-column: 1 / -1;
 }
 
 .model-figures dt {

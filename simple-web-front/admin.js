@@ -286,7 +286,7 @@ function modelCard(model) {
         ["Model file", formatBytes(model.bin_bytes)],
         ["Modified", formatDate(model.modified)]
     ]) {
-        const pair = document.createElement("div");
+        const pair = element("div", label === "Modified" ? "wide" : "");
         pair.append(element("dt", "", label), element("dd", "", value));
         figures.appendChild(pair);
     }
