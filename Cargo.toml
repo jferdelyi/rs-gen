@@ -5,9 +5,15 @@ members = ["rs-gen-core",
 ]
 resolver = "3"
 
+# Shared by every crate of the workspace
+[workspace.package]
+license = "EPL-2.0"
+
 # Any warning, from rustc or clippy, fails the build
 [workspace.lints.rust]
 warnings = "deny"
+# No unsafe code in any crate
+unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

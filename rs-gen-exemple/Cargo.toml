@@ -2,9 +2,10 @@
 name = "rs-gen-exemple"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
-rs-gen-core = { path = "../rs-gen-core" }
+rs-gen-core = { path = "../rs-gen-core" }                  # The n-gram models
 
 [lints]
 workspace = true
