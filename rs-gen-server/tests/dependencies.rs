@@ -15,12 +15,8 @@ const FIXED: &[(&str, &str)] = &[
 	("bytes", "1.11.1"),
 	// RUSTSEC-2026-0009: denial of service through stack exhaustion
 	("time", "0.3.47"),
-	// RUSTSEC-2026-0391: data of an abandoned stream leaks into the next one
-	("zstd", "0.13.4"),
-	// RUSTSEC-2026-0398, 0403 and the unsound zstd-safe 7.2 advisories
-	("zstd-safe", "7.4.0"),
-	// RUSTSEC-2026-0410: memory corruption on allocation failure
-	("zstd-sys", "2.1.2"),
+	// The zstd crates left with the compression features of actix-web: the test below keeps
+	// them out (RUSTSEC-2026-0391, 0398, 0403 and 0410)
 	// RUSTSEC-2026-0097: unsound with a custom logger
 	("rand", "0.9.5"),
 	// RUSTSEC-2026-0386: AsyncFd::new and related constructors violate I/O safety. Fixed in 1.51.6
@@ -64,6 +60,19 @@ fn every_locked_dependency_has_its_security_fixes() {
 		}
 	}
 	assert!(old.is_empty(), "versions with known vulnerabilities in Cargo.lock:\n{}", old.join("\n"));
+}
+
+#[test]
+fn the_server_pulls_neither_http2_nor_compression() {
+	// actix-web is built with the features the server uses only: it serves HTTP/1.x behind the
+	// reverse proxy, which compresses the responses. HTTP/2 (h2) and the decoders of compressed
+	// request bodies are code an attacker could reach for nothing.
+	let packages = locked();
+	let pulled: Vec<&str> = ["h2", "brotli", "flate2", "zstd", "zstd-safe", "zstd-sys"]
+		.into_iter()
+		.filter(|crate_name| packages.iter().any(|(name, _)| name == crate_name))
+		.collect();
+	assert!(pulled.is_empty(), "back in Cargo.lock: {}", pulled.join(", "));
 }
 
 #[test]

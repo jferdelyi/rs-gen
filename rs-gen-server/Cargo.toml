@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 rs-gen-core = { path = "../rs-gen-core" }                  # The n-gram models
 serde = { version = "1.0.228", features = ["derive"] }     # JSON of the public and admin APIs
-actix-web = "4.20.0"                                       # HTTP server
+actix-web = { version = "4.20.0", default-features = false, features = ["macros", "cookies", "unicode"] }  # HTTP/1.x server, without HTTP/2 nor compression
 actix-cors = "0.7.1"                                       # CORS headers of the public API
 argon2 = "0.6.0"                                           # Hash of the admin password
 rand = "0.9.5"                                             # Tokens of the admin sessions
