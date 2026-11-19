@@ -23,6 +23,9 @@ const FIXED: &[(&str, &str)] = &[
 	("zstd-sys", "2.1.2"),
 	// RUSTSEC-2026-0097: unsound with a custom logger
 	("rand", "0.9.5"),
+	// RUSTSEC-2026-0386: AsyncFd::new and related constructors violate I/O safety. Fixed in 1.51.6
+	// and 1.53.3, not in the 1.52 branch: 1.53.3 is the lowest version accepted here
+	("tokio", "1.53.3"),
 ];
 
 /// The packages of `Cargo.lock`: name and version.
