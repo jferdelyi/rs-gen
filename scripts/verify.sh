@@ -126,10 +126,8 @@ cargo_check "tests" test --locked
 
 # 11. No locked dependency with a known vulnerability. cargo audit fetches the RustSec advisory
 #     database at each run: a new advisory fails the gate without any change to the code. Warnings
-#     (unmaintained or unsound crates) are counted, not denied. One advisory is ignored:
-#     RUSTSEC-2026-0258, h2 0.3 with no fix in that branch. The server binds with
-#     HttpServer::bind, which serves HTTP/1.x only, so the HTTP/2 code of h2 is never reached.
-audit_ignored="RUSTSEC-2026-0258"
+#     (unmaintained or unsound crates) are counted, not denied. The advisories to ignore, each
+#     with its reason, are in .cargo/audit.toml, which the audit workflow of the CI reads too.
 if [ "$search_only" -eq 1 ]; then
 	skip "audit" "--search-only"
 elif ! command -v cargo >/dev/null; then
@@ -137,8 +135,9 @@ elif ! command -v cargo >/dev/null; then
 elif ! command -v cargo-audit >/dev/null; then
 	skip "audit" "cargo-audit is not installed"
 else
-	cargo audit --json --ignore "$audit_ignored" >"$logs/audit.json" 2>"$logs/audit.log"
-	# The report as "<vulnerabilities> <warnings> <crates>", or nothing when it is not JSON.
+	cargo audit --json >"$logs/audit.json" 2>"$logs/audit.log"
+	# The report as "<vulnerabilities> <warnings> <ignored> <crates>", or nothing when it is not
+	# JSON. The ignored advisories are the ones cargo audit read in its settings.
 	report=$(perl -MJSON::PP -e '
 		local $/;
 		my $j = eval { decode_json(<>) };
@@ -148,16 +147,17 @@ else
 		my @crates = grep { !$seen{$_}++ } map { "$_->{package}{name} $_->{package}{version}" } @found;
 		my $warnings = 0;
 		$warnings += @$_ for values %{$j->{warnings} || {}};
-		print scalar(@found), " $warnings ", join(", ", @crates), "\n";
+		my $ignored = join(",", @{$j->{settings}{ignore} || []}) || "none";
+		print scalar(@found), " $warnings $ignored ", join(", ", @crates), "\n";
 	' "$logs/audit.json")
 	if [ -z "$report" ]; then
 		fail "audit" "cargo audit gave no report, see $logs/audit.log"
 	else
-		read -r found warnings crates <<<"$report"
+		read -r found warnings ignored crates <<<"$report"
 		if [ "$found" -ne 0 ]; then
 			fail "audit" "$found vulnerability(ies) in $crates, see $logs/audit.json"
 		else
-			pass "audit" "0 vulnerability, $audit_ignored ignored, $warnings warning(s) in $logs/audit.json"
+			pass "audit" "0 vulnerability, ignored: $ignored, $warnings warning(s) in $logs/audit.json"
 		fi
 	fi
 fi
