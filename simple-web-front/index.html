@@ -9,6 +9,7 @@
   <meta name="description" content="A configurable word generator based on Markov chains.">
   <meta name="theme-color" content="#161b22">
 
+  <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
@@ -26,6 +27,8 @@
 
       <!-- Terminal -->
       <div id="terminal" class="terminal"></div>
+      <!-- The terminal writes each word letter by letter: the whole word is announced here -->
+      <p id="announcer" class="visually-hidden" role="status"></p>
 
       <!-- Generate / Reset -->
       <div class="generate-row">
@@ -69,11 +72,11 @@
   </div>
 
   <!-- Settings Modal -->
-  <div id="settings-modal" class="hidden modal">
+  <dialog id="settings-modal" class="modal" aria-labelledby="settings-title">
     <div class="modal-content">
 
       <!-- General Settings -->
-      <h3>General Settings</h3>
+      <h3 id="settings-title">General Settings</h3>
 
       <div class="input-group">
         <label for="randomness" class="label-title">
@@ -139,14 +142,14 @@
 
         <label class="seed-option" title="Provide a custom starting sequence">
           <input type="radio" name="seed" value="custom">
-          <span>Custom seed</span>
-          <input type="text" id="custom-seed" disabled>
+          <span id="custom-seed-label">Custom seed</span>
+          <input type="text" id="custom-seed" aria-labelledby="custom-seed-label" disabled>
         </label>
 
         <label class="seed-option" title="Select a random seed from a specific n-gram order">
           <input type="radio" name="seed" value="random">
-          <span>Random n-gram</span>
-          <input type="number" id="random-seed" value="2" min="2" disabled>
+          <span id="random-seed-label">Random n-gram</span>
+          <input type="number" id="random-seed" value="2" min="2" aria-labelledby="random-seed-label" disabled>
         </label>
 
         <label class="seed-option" title="Select a random seed from a randomly chosen n-gram order">
@@ -165,7 +168,7 @@
       </button>
 
     </div>
-  </div>
+  </dialog>
 
   <script src="script.js"></script>
 </body>

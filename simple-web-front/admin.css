@@ -51,10 +51,10 @@
 /* =========================
    Buttons
 ========================= */
-/* Buttons at the end of a row share one width */
+/* Buttons at the end of a row share one width. Through flex only: a width
+   would set the smallest size of the row and push it out of a 320 px screen. */
 .fixed-btn {
   flex: 0 0 160px;
-  width: 160px;
 }
 
 .small-btn {
@@ -66,9 +66,9 @@
 .danger-btn {
   padding: 10px 14px;
   border-radius: 8px;
-  border: 1px solid #b42318;
-  background: #d92d20;
-  color: #fff;
+  border: 1px solid var(--danger-hover);
+  background: var(--danger);
+  color: var(--on-danger);
   cursor: pointer;
   transition: background 0.15s, transform 0.05s;
 }
@@ -79,7 +79,7 @@
 }
 
 .danger-btn:hover:not(:disabled) {
-  background: #b42318;
+  background: var(--danger-hover);
 }
 
 .danger-btn:active:not(:disabled) {
@@ -115,7 +115,7 @@ input[type="password"] {
   width: 100%;
   padding: 0.4rem;
   border-radius: 6px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--field-border);
 }
 
 /* One label column for the whole form */
@@ -134,23 +134,9 @@ input[type="password"] {
   grid-template-columns: 170px 1fr;
 }
 
-/* Read by password managers, not shown: out of the layout, not `display: none`.
-   `input.` outweighs the width that style.css gives to every text input. */
-input.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
 .hint {
   margin: 0;
-  color: #57606a;
+  color: var(--muted);
   font-size: 14px;
 }
 
@@ -165,7 +151,7 @@ input.visually-hidden {
 }
 
 .figures dt {
-  color: #57606a;
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
 
@@ -192,7 +178,7 @@ input.visually-hidden {
   gap: 10px;
   min-width: 0;
   padding: 12px 14px;
-  border: 1px solid #eaeef2;
+  border: 1px solid var(--card-border);
   border-radius: 14px;
 }
 
@@ -217,7 +203,7 @@ input.visually-hidden {
 }
 
 .model-id {
-  color: #57606a;
+  color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
@@ -245,7 +231,7 @@ input.visually-hidden {
 }
 
 .model-figures dt {
-  color: #57606a;
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -276,18 +262,18 @@ input.visually-hidden {
 }
 
 .status-shown {
-  color: #1a7f37;
+  color: var(--success);
 }
 
 .status-hidden {
-  color: #57606a;
+  color: var(--muted);
 }
 
 .status-learning,
 .status-saving,
 .status-testing,
 .status-loading {
-  color: #9a6700;
+  color: var(--busy);
 }
 
 /* A hidden model whose last show failed: the reason is in the tooltip */
@@ -297,7 +283,7 @@ input.visually-hidden {
 }
 
 .status-failed {
-  color: #d92d20;
+  color: var(--danger);
   cursor: help;
 }
 
@@ -316,18 +302,18 @@ ul.message {
 }
 
 .message-error {
-  background: #fef3f2;
-  color: #b42318;
+  background: var(--error-surface);
+  color: var(--error-text);
 }
 
 .message-warning {
-  background: #fff8e6;
-  color: #7a4d00;
+  background: var(--warning-surface);
+  color: var(--warning-text);
 }
 
 .message-success {
-  background: #ecfdf3;
-  color: #067647;
+  background: var(--success-surface);
+  color: var(--success-text);
 }
 
 .report {
@@ -343,8 +329,8 @@ ul.message {
   gap: 8px;
   padding: 8px 12px;
   border-radius: 8px;
-  background: #fff8e6;
-  color: #7a4d00;
+  background: var(--warning-surface);
+  color: var(--warning-text);
   font-size: 14px;
   cursor: pointer;
 }

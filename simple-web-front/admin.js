@@ -163,9 +163,11 @@ async function api(method, path, body) {
     return { status: response.status, ok: response.ok, data };
 }
 
+// A message stays in the accessibility tree when it is empty: out of sight, not `display: none`,
+// or screen readers would not announce its next text
 function showMessage(element, text) {
     element.textContent = text;
-    element.classList.toggle("hidden", !text);
+    element.classList.toggle("visually-hidden", !text);
 }
 
 /* =============================
@@ -317,8 +319,7 @@ function forgetAddedModel(list) {
     }
     const added = list.find(model => model.name === addedModel);
     if (!added || !ON_THE_WAY.has(added.status)) {
-        report.replaceChildren();
-        report.classList.add("hidden");
+        clearReport();
         addedModel = null;
     }
 }
@@ -407,15 +408,20 @@ function openLabel(model) {
     showMessage(labelError, "");
     showMessage(modelsMessage, "");
     labelBtn.disabled = false;
-    labelModal.classList.remove("hidden");
+    // A modal dialog: the page behind stops answering and Escape closes it
+    labelModal.showModal();
     labelInput.focus();
     labelInput.select();
 }
 
 function closeLabel() {
-    modelToLabel = null;
-    labelModal.classList.add("hidden");
+    labelModal.close();
 }
+
+// Closed by a button, by a press outside its card or by Escape
+labelModal.addEventListener("close", () => {
+    modelToLabel = null;
+});
 
 labelInput.addEventListener("input", () => {
     const problem = labelProblem(labelInput.value);
@@ -467,14 +473,18 @@ function openDelete(name) {
     deleteConfirm.value = "";
     deleteBtn.disabled = true;
     showMessage(deleteError, "");
-    deleteModal.classList.remove("hidden");
+    deleteModal.showModal();
     deleteConfirm.focus();
 }
 
 function closeDelete() {
-    modelToDelete = null;
-    deleteModal.classList.add("hidden");
+    deleteModal.close();
 }
+
+// Closed by a button, by a press outside its card or by Escape
+deleteModal.addEventListener("close", () => {
+    modelToDelete = null;
+});
 
 deleteConfirm.addEventListener("input", () => {
     deleteBtn.disabled = deleteConfirm.value !== modelToDelete;
@@ -540,13 +550,24 @@ modelFile.addEventListener("change", () => {
     if (file && !modelName.value) {
         modelName.value = nameFromFile(file.name);
     }
-    report.classList.add("hidden");
+    clearReport();
     forgetCheck();
     updateAddButtons();
 });
 
 modelName.addEventListener("input", updateAddButtons);
 forceAdd.addEventListener("change", updateAddButtons);
+
+// The report is a live region: emptied and out of sight, it stays in the accessibility tree
+function clearReport() {
+    report.replaceChildren();
+    report.classList.add("visually-hidden");
+}
+
+function showReport(...parts) {
+    report.replaceChildren(...parts);
+    report.classList.remove("visually-hidden");
+}
 
 function renderReport(result, title) {
     const parts = [];
@@ -594,8 +615,7 @@ function renderReport(result, title) {
         }
         parts.push(dl);
     }
-    report.replaceChildren(...parts);
-    report.classList.remove("hidden");
+    showReport(...parts);
 }
 
 checkBtn.addEventListener("click", async () => {
@@ -642,8 +662,7 @@ addBtn.addEventListener("click", async () => {
             const note = force
                 ? `'${name}' is being added, using swap: its status is in the list of the models.`
                 : `'${name}' is being added: its status is in the list of the models.`;
-            report.replaceChildren(element("p", "hint", note));
-            report.classList.remove("hidden");
+            showReport(element("p", "hint", note));
             modelFile.value = "";
             modelName.value = "";
             modelLabel.value = "";

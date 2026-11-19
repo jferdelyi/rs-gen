@@ -10,6 +10,7 @@ let currentUrl = null;
    DOM References
 ============================= */
 const terminal = document.getElementById("terminal");
+const announcer = document.getElementById("announcer");
 const generateBtn = document.getElementById("generate-btn");
 const copyBtn = document.getElementById("copy-command");
 const openSettingsBtn = document.getElementById("open-settings");
@@ -171,15 +172,19 @@ async function loadModels() {
             const wrapper = document.createElement("div");
             wrapper.className = "input-group";
 
+            const slider = document.createElement("input");
+            // Model names are letters, digits, '_' and '-': a valid id as they are
+            slider.id = `weight-${model}`;
+
             const label = document.createElement("label");
             label.className = "label-title";
+            label.htmlFor = slider.id;
             // The display name for the visitor; the API keeps the technical name
             label.textContent = labels[model] || model;
 
             const row = document.createElement("div");
             row.className = "slider-inline";
 
-            const slider = document.createElement("input");
             slider.type = "range";
             slider.min = 0;
             slider.max = 100;
@@ -246,7 +251,17 @@ function initTerminal() {
     terminal.append(loginLine, promptLine);
 }
 
+// Announces a whole text to screen readers; emptied first, so that the same word twice is
+// announced twice
+function announce(text) {
+    announcer.textContent = "";
+    setTimeout(() => {
+        announcer.textContent = text;
+    }, 50);
+}
+
 function typeWriter(text) {
+    announce(text);
     const line = document.createElement("div");
     terminal.appendChild(line);
 
@@ -315,19 +330,21 @@ seedRadios.forEach(radio => {
     });
 });
 
+// A modal dialog: the page behind stops answering and Escape closes it
 openSettingsBtn.addEventListener("click",
-    () => settingsModal.classList.remove("hidden")
+    () => settingsModal.showModal()
 );
 
 closeSettingsBtn.addEventListener("click",
-    () => settingsModal.classList.add("hidden")
+    () => settingsModal.close()
 );
 
 resetBtn.addEventListener("click", initTerminal);
 
+// The dialog covers the screen around its card: a press on the dialog itself is outside the card
 settingsModal.addEventListener("mousedown", e => {
-    if (!document.querySelector(".modal-content").contains(e.target)) {
-        settingsModal.classList.add("hidden");
+    if (e.target === settingsModal) {
+        settingsModal.close();
     }
 });
 

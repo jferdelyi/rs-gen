@@ -11,13 +11,25 @@ Static web pages to play with the generator and to manage its models. No build s
 |---|---|
 | `index.html` | The generator page: model weights, parameters, generated words. |
 | `script.js` | Calls `GET /v1/models` and `GET /v1/generate`, and keeps the settings in the browser. |
-| `style.css` | The style of both pages. |
+| `theme.css` | Every color of both pages, as tokens (`--surface`, `--focus`...), loaded before `style.css`. |
+| `style.css` | The style of both pages, with the colors of `theme.css` only. |
 | `admin.html` | The admin page. |
 | `admin.js` | Calls the admin routes (`/v1/admin/...`) of `rs-gen-server`. |
-| `admin.css` | What the admin page adds to `style.css`: table, figures, messages, delete button. |
+| `admin.css` | What the admin page adds to `style.css`: model cards, figures, messages, delete button. |
 | `icon.svg`, `icon-32.png`, `icon-192.png` | Icon of the pages, in the browser tab and on Android. |
 | `apple-touch-icon.png` | Icon of the generator page on the iOS home screen: square, iOS rounds the corners itself. |
 | `github-icon.svg`, `reload.svg`, `admin-icon.svg` | Icons of the links and buttons; the faded lock of the generator page leads to the admin page. |
+
+## Accessibility
+
+Both pages aim at WCAG 2.2 AA:
+- **Colors**: text reaches a contrast of 4.5:1 on its background, field borders and the focus ring 3:1 on what surrounds them (1.4.3, 1.4.11). Every color is a token of `theme.css`.
+- **Keyboard**: the focus is drawn on every control with the `--focus` color (2.4.7). The settings, display name and delete dialogs are native `<dialog>` elements opened with `showModal()`: the page behind stops answering, Escape closes them, and the focus goes back to the button that opened them.
+- **Messages**: each message of the admin page is a live region (`role="status"` or `role="alert"`) that stays in the accessibility tree while empty, so that its next text is announced (4.1.3). The generator writes a word letter by letter; the whole word is announced apart.
+- **Labels**: every field has a visible label, the weights of the models included (3.3.2).
+- **Narrow screens**: nothing goes out of a 320 px wide screen (1.4.10).
+
+[`rs-gen-server/tests/web_front.rs`](../rs-gen-server/tests/web_front.rs) checks these rules on the files: `cargo test -p rs-gen-server --test web_front`. The behavior of the dialogs and the layout at 320 px were checked by hand in a Chromium browser; not tested in Safari.
 
 ## API address
 

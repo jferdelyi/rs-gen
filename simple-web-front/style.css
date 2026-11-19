@@ -10,7 +10,8 @@
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  background: #f5f5f7;
+  background: var(--page);
+  color: var(--text);
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -28,10 +29,10 @@ body {
    Card
 ========================= */
 .card {
-  background: #fff;
+  background: var(--surface);
   padding: 2rem;
   border-radius: 28px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 20px 40px var(--shadow);
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -41,8 +42,8 @@ body {
    Terminal
 ========================= */
 .terminal {
-  background: #0d1117;
-  color: #c9d1d9;
+  background: var(--terminal);
+  color: var(--terminal-text);
   font-family: "Menlo", "Consolas", monospace;
   font-size: 14px;
   padding: 16px;
@@ -57,17 +58,17 @@ body {
 }
 
 .terminal-muted {
-  color: #8b949e;
+  color: var(--terminal-muted);
   margin-bottom: 6px;
 }
 
 .terminal-user {
-  color: #3fb950;
+  color: var(--terminal-user);
   font-weight: 600;
 }
 
 .terminal-path {
-  color: #a371f7;
+  color: var(--terminal-path);
 }
 
 /* =========================
@@ -77,15 +78,15 @@ body {
   padding: 0.6rem 1.2rem;
   border-radius: 14px;
   border: none;
-  background: black;
-  color: white;
+  background: var(--primary);
+  color: var(--on-primary);
   font-family: inherit;
   cursor: pointer;
   transition: background 0.15s, transform 0.05s;
 }
 
 .primary-btn:hover {
-  background: #222;
+  background: var(--primary-hover);
 }
 
 .primary-btn:active {
@@ -107,15 +108,15 @@ body {
   flex: 1;
   padding: 10px 14px;
   border-radius: 8px;
-  border: 1px solid #30363d;
-  background: #161b22;
-  color: #c9d1d9;
+  border: 1px solid var(--action-border);
+  background: var(--action);
+  color: var(--on-action);
   cursor: pointer;
   transition: background 0.15s, transform 0.05s;
 }
 
 .action-btn:hover:not(:disabled) {
-  background: #21262d;
+  background: var(--action-hover);
 }
 
 .action-btn:active:not(:disabled) {
@@ -157,7 +158,7 @@ body {
 }
 
 .icon-btn:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--icon-hover);
 }
 
 .icon-btn:active {
@@ -204,7 +205,7 @@ input[type="text"] {
   width: 100%;
   padding: 0.4rem;
   border-radius: 6px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--field-border);
 }
 
 input[type="radio"],
@@ -255,19 +256,32 @@ input[type="checkbox"] {
 /* =========================
    Modal
 ========================= */
+/* A native <dialog> opened with showModal(): the page behind stops answering
+   and Escape closes it. The dialog covers the screen and scrolls; its card is
+   .modal-content, so a press outside the card lands on the dialog itself. */
 .modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.2);
-  backdrop-filter: blur(8px);
-  z-index: 10;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 1rem;
 }
 
+.modal::backdrop {
+  background: var(--backdrop);
+  backdrop-filter: blur(8px);
+}
+
 .modal-content {
-  background: #fff;
+  background: var(--surface);
   padding: 1rem;
   border-radius: 28px;
   width: 100%;
@@ -284,6 +298,28 @@ input[type="checkbox"] {
 ========================= */
 .hidden {
   display: none;
+}
+
+/* Out of sight but still read by screen readers and password managers. An
+   empty message takes it instead of .hidden: a live region removed with
+   display: none is not announced when its text comes back. !important: the
+   rules of the fields and of the messages must not give it a size again. */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  white-space: nowrap !important;
+}
+
+/* The keyboard focus, drawn the same way on every control */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .hidden-slider {

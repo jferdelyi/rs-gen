@@ -8,6 +8,7 @@
   <meta name="robots" content="noindex, nofollow">
   <meta name="theme-color" content="#161b22">
 
+  <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="admin.css">
   <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
@@ -25,13 +26,16 @@
         <h2>Model administration</h2>
         <a href="index.html" class="action-btn fixed-btn link-btn" title="Back to the generator page">← Back</a>
       </div>
-      <form id="login-form" class="admin-row">
+      <form id="login-form">
         <!-- Without a user name, password managers take the form for an account creation -->
         <input type="text" name="username" autocomplete="username" value="admin" class="visually-hidden" tabindex="-1" aria-hidden="true">
-        <input type="password" id="password" name="password" autocomplete="current-password" placeholder="Admin password" required>
-        <button type="submit" id="login-btn" class="primary-btn fixed-btn">Log in</button>
+        <label for="password" class="label-title">Admin password</label>
+        <div class="admin-row">
+          <input type="password" id="password" name="password" autocomplete="current-password" required>
+          <button type="submit" id="login-btn" class="primary-btn fixed-btn">Log in</button>
+        </div>
       </form>
-      <p id="login-error" class="message message-error hidden"></p>
+      <p id="login-error" class="message message-error visually-hidden" role="alert"></p>
     </div>
 
     <!-- Administration -->
@@ -59,8 +63,8 @@
       <div class="card">
         <h3>Models</h3>
         <div id="models" class="model-cards"></div>
-        <p id="models-error" class="message message-error hidden"></p>
-        <p id="models-message" class="message message-success hidden"></p>
+        <p id="models-error" class="message message-error visually-hidden" role="alert"></p>
+        <p id="models-message" class="message message-success visually-hidden" role="status"></p>
       </div>
 
       <div class="card">
@@ -87,7 +91,7 @@
           <button id="add-btn" class="primary-btn fixed-btn" disabled
                   title="Available once the check of this file and this name passed">Add the model</button>
         </div>
-        <div id="report" class="report hidden"></div>
+        <div id="report" class="report visually-hidden" role="status"></div>
       </div>
 
       <div class="card">
@@ -105,7 +109,7 @@
           <label for="new-password-again" class="label-title">New password again</label>
           <input type="password" id="new-password-again" autocomplete="new-password" minlength="12" required>
         </form>
-        <p id="password-message" class="message hidden"></p>
+        <p id="password-message" class="message visually-hidden" role="status"></p>
         <div class="button-row">
           <button type="submit" form="password-form" id="password-btn" class="primary-btn fixed-btn">Change password</button>
         </div>
@@ -115,40 +119,40 @@
   </div>
 
   <!-- Display name -->
-  <div id="label-modal" class="hidden modal">
+  <dialog id="label-modal" class="modal" aria-labelledby="label-title">
     <div class="modal-content">
-      <h3>Display name of <span id="label-name"></span></h3>
+      <h3 id="label-title">Display name of <span id="label-name"></span></h3>
       <p class="hint">
         Shown to the visitors instead of the technical name, which stays the same, in the API too.
         Leave it empty to show the technical name.
       </p>
       <label for="label-input" class="label-title">Display name</label>
       <input type="text" id="label-input" maxlength="64" autocomplete="off">
-      <p id="label-error" class="message message-error hidden"></p>
+      <p id="label-error" class="message message-error visually-hidden" role="alert"></p>
       <div class="button-row">
         <button id="label-btn" class="primary-btn fixed-btn">Save</button>
         <button id="cancel-label-btn" class="action-btn fixed-btn">Cancel</button>
       </div>
     </div>
-  </div>
+  </dialog>
 
   <!-- Delete confirmation -->
-  <div id="delete-modal" class="hidden modal">
+  <dialog id="delete-modal" class="modal" aria-labelledby="delete-title">
     <div class="modal-content">
-      <h3>Delete <span id="delete-name"></span> for good?</h3>
+      <h3 id="delete-title">Delete <span id="delete-name"></span> for good?</h3>
       <p class="message message-warning">
         This deletes the text file and the model file from the server. It cannot be undone:
         to keep the model without using memory, hide it instead.
       </p>
       <label for="delete-confirm" class="label-title">Type the model name to confirm</label>
       <input type="text" id="delete-confirm" autocomplete="off" spellcheck="false">
-      <p id="delete-error" class="message message-error hidden"></p>
+      <p id="delete-error" class="message message-error visually-hidden" role="alert"></p>
       <div class="button-row">
         <button id="delete-btn" class="danger-btn fixed-btn" disabled>Delete the model</button>
         <button id="cancel-delete-btn" class="action-btn fixed-btn">Cancel</button>
       </div>
     </div>
-  </div>
+  </dialog>
 
   <script src="admin.js"></script>
 </body>

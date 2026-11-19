@@ -1,0 +1,52 @@
+/* =========================
+   Theme: every color of the front, loaded before style.css.
+   style.css and admin.css use these tokens only. The contrast of each
+   text on its background (4.5:1) and of the field borders and the focus
+   ring (3:1) is checked by rs-gen-server/tests/web_front.rs (WCAG 2.2 AA).
+========================= */
+:root {
+  /* Page and cards */
+  --page: #f5f5f7;
+  --surface: #ffffff;
+  --text: #000000;
+  --muted: #57606a;
+  --card-border: #eaeef2;
+  --shadow: rgba(0, 0, 0, 0.08);
+  --icon-hover: rgba(0, 0, 0, 0.08);
+  --backdrop: rgba(0, 0, 0, 0.2);
+
+  /* Terminal */
+  --terminal: #0d1117;
+  --terminal-text: #c9d1d9;
+  --terminal-muted: #8b949e;
+  --terminal-user: #3fb950;
+  --terminal-path: #a371f7;
+
+  /* Buttons */
+  --primary: #000000;
+  --primary-hover: #222222;
+  --on-primary: #ffffff;
+  --action: #161b22;
+  --action-hover: #21262d;
+  --action-border: #30363d;
+  --on-action: #c9d1d9;
+  --danger: #d92d20;
+  --danger-hover: #b42318;
+  --on-danger: #ffffff;
+
+  /* Fields and keyboard focus */
+  --field-border: #848d97;
+  --focus: #0969da;
+
+  /* Status of a model */
+  --success: #1a7f37;
+  --busy: #9a6700;
+
+  /* Messages */
+  --error-text: #b42318;
+  --error-surface: #fef3f2;
+  --warning-text: #7a4d00;
+  --warning-surface: #fff8e6;
+  --success-text: #067647;
+  --success-surface: #ecfdf3;
+}
