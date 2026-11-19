@@ -374,8 +374,10 @@ impl MultiGramModel {
 	/// # Notes
 	/// - Each state is recorded as a 64-bit fingerprint, several times smaller than the state:
 	///   a text too big to be learned is detected without running out of memory.
-	/// - The fingerprints come from SipHash: the fast hasher of the tables gives the same
-	///   64 bits to words that differ only by their last byte ("susanna", "susannah").
+	/// - The fingerprints come from SipHash: the fast hasher of the tables pads the last bytes
+	///   with zeros, so it gives the same 64 bits to words that differ only by trailing NUL
+	///   bytes ("abc", "abc\0"). A table compares the whole keys and only loses a little speed;
+	///   a count of fingerprints would count them once.
 	/// - The statistics are the ones `stats` gives once the text is learned, as long as
 	///   no two fingerprints collide (less than 1 chance in 3 000 below 100 million states).
 	pub fn count_text(text: &str, max_states: usize) -> TextCount {
