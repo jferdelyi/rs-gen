@@ -3,7 +3,7 @@
 # check, then the verdict. Exit code 0 when every check that could run passed, 1 when one failed, 2
 # when the gate itself could not run.
 #
-#   bash scripts/verify.sh                 every check: searches, JavaScript, build, clippy, tests
+#   bash scripts/verify.sh                 every check: searches, JavaScript, build, clippy, tests, audit
 #   bash scripts/verify.sh --search-only   the searches only, in a second
 #
 # Every search runs beside a positive witness, a pattern that must be found in the same files: a
@@ -123,6 +123,44 @@ mkdir -p "$logs" || exit 2
 cargo_check "build" build --locked --all-targets
 cargo_check "clippy" clippy --locked --all-targets
 cargo_check "tests" test --locked
+
+# 11. No locked dependency with a known vulnerability. cargo audit fetches the RustSec advisory
+#     database at each run: a new advisory fails the gate without any change to the code. Warnings
+#     (unmaintained or unsound crates) are counted, not denied. One advisory is ignored:
+#     RUSTSEC-2026-0258, h2 0.3 with no fix in that branch. The server binds with
+#     HttpServer::bind, which serves HTTP/1.x only, so the HTTP/2 code of h2 is never reached.
+audit_ignored="RUSTSEC-2026-0258"
+if [ "$search_only" -eq 1 ]; then
+	skip "audit" "--search-only"
+elif ! command -v cargo >/dev/null; then
+	skip "audit" "cargo is not installed"
+elif ! command -v cargo-audit >/dev/null; then
+	skip "audit" "cargo-audit is not installed"
+else
+	cargo audit --json --ignore "$audit_ignored" >"$logs/audit.json" 2>"$logs/audit.log"
+	# The report as "<vulnerabilities> <warnings> <crates>", or nothing when it is not JSON.
+	report=$(perl -MJSON::PP -e '
+		local $/;
+		my $j = eval { decode_json(<>) };
+		exit 1 unless ref $j eq "HASH" && ref $j->{vulnerabilities} eq "HASH";
+		my @found = @{$j->{vulnerabilities}{list} || []};
+		my %seen;
+		my @crates = grep { !$seen{$_}++ } map { "$_->{package}{name} $_->{package}{version}" } @found;
+		my $warnings = 0;
+		$warnings += @$_ for values %{$j->{warnings} || {}};
+		print scalar(@found), " $warnings ", join(", ", @crates), "\n";
+	' "$logs/audit.json")
+	if [ -z "$report" ]; then
+		fail "audit" "cargo audit gave no report, see $logs/audit.log"
+	else
+		read -r found warnings crates <<<"$report"
+		if [ "$found" -ne 0 ]; then
+			fail "audit" "$found vulnerability(ies) in $crates, see $logs/audit.json"
+		else
+			pass "audit" "0 vulnerability, $audit_ignored ignored, $warnings warning(s) in $logs/audit.json"
+		fi
+	fi
+fi
 
 if [ "$failed" -eq 0 ]; then
 	echo "verdict  PASS"

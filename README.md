@@ -31,7 +31,7 @@ Each crate has a single responsibility and can be used independently. Each direc
 bash scripts/verify.sh
 ```
 
-[`scripts/verify.sh`](scripts/verify.sh) runs the checks to pass before a commit, one line PASS, FAIL or NOT RUN each: it searches the text files (long dashes, invisible characters, secrets, machine paths, line endings), checks the syntax of the front scripts with `node --check`, then builds, runs clippy and the tests with the versions of `Cargo.lock`. `--search-only` runs the searches alone. It needs bash 3.2 or later, git and perl; without node or cargo, their checks are NOT RUN.
+[`scripts/verify.sh`](scripts/verify.sh) runs the checks to pass before a commit, one line PASS, FAIL or NOT RUN each: it searches the text files (long dashes, invisible characters, secrets, machine paths, line endings), checks the syntax of the front scripts with `node --check`, then builds, runs clippy and the tests with the versions of `Cargo.lock`, and last runs [`cargo audit`](https://github.com/rustsec/rustsec/tree/main/cargo-audit) on `Cargo.lock` against the RustSec advisory database, fetched at each run. A vulnerability fails the gate; warnings (unmaintained or unsound crates) are counted in its line. One advisory is ignored, and the script says why: RUSTSEC-2026-0258 (h2 0.3, no fix in that branch), whose HTTP/2 code the server never reaches. `--search-only` runs the searches alone. It needs bash 3.2 or later, git and perl; without node, cargo or cargo-audit, their checks are NOT RUN.
 
 Rustc and clippy warnings are errors in every crate, and unsafe code is forbidden. The [CI](.github/workflows/ci.yml) builds the workspace, runs clippy and the tests on Linux, macOS and Windows for every push to `main` and every pull request.
 
