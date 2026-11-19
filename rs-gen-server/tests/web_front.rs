@@ -334,18 +334,43 @@ fn every_field_has_a_visible_label() {
 }
 
 #[test]
+fn every_button_has_the_font_size_of_the_links_drawn_as_buttons() {
+	// WebKit gives a button the small font of the system (11 px), Chromium and Firefox 13.333 px:
+	// in Safari, the Log out button was smaller than the Back link next to it
+	let all: Vec<Rule> = STYLES.iter().flat_map(|f| rules(&front(f))).collect();
+	let size_of = |selector: &str| {
+		all.iter()
+			.filter(|r| r.selector.split(',').any(|s| s.trim() == selector))
+			.flat_map(|r| r.declarations.iter())
+			.find(|(p, _)| p == "font-size")
+			.map(|(_, v)| v.clone())
+	};
+	let link = size_of(".link-btn").expect("no font size for .link-btn");
+	assert_eq!(size_of("button").as_deref(), Some(link.as_str()), "the buttons have no font size of their own");
+}
+
+#[test]
 fn a_row_of_fixed_buttons_shrinks_on_a_narrow_screen() {
-	// A width on .fixed-btn sets the smallest size of the row: at 320 px the admin page
-	// became 356 px wide, the Back and Log out buttons out of the screen (1.4.10)
-	let widths: Vec<String> = STYLES
-		.iter()
-		.flat_map(|f| rules(&front(f)))
-		.filter(|r| r.selector.split(',').any(|s| s.trim() == ".fixed-btn"))
-		.flat_map(|r| r.declarations)
-		.filter(|(p, _)| p == "width" || p == "min-width")
-		.map(|(p, v)| format!("{p}: {v}"))
-		.collect();
-	assert!(widths.is_empty(), ".fixed-btn has a fixed width: {}", widths.join(", "));
+	// WebKit sizes a row of buttons from their width, not from their flex basis: without a
+	// width, the Log out button left its card in Safari. On a narrow screen the width gives way:
+	// at 320 px a fixed width made the admin page 356 px wide, Back and Log out out of the
+	// screen (1.4.10)
+	let widths = |css: &str| -> Vec<String> {
+		rules(css)
+			.into_iter()
+			.filter(|r| r.selector.split(',').any(|s| s.trim() == ".fixed-btn"))
+			.flat_map(|r| r.declarations)
+			.filter(|(p, _)| p == "width" || p == "min-width")
+			.map(|(p, v)| format!("{p}: {v}"))
+			.collect()
+	};
+	let admin = without_comments(&front("admin.css"));
+	let (wide, narrow) = admin.split_once("@media (max-width: 600px)").expect("no narrow screen block in admin.css");
+	assert_eq!(widths(wide), ["width: 160px"], "on a wide screen");
+	assert_eq!(widths(narrow), ["width: auto"], "on a narrow screen");
+	for file in ["theme.css", "style.css"] {
+		assert!(widths(&front(file)).is_empty(), "{file} gives .fixed-btn a width");
+	}
 }
 
 #[test]

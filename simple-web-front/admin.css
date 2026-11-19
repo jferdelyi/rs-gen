@@ -51,10 +51,12 @@
 /* =========================
    Buttons
 ========================= */
-/* Buttons at the end of a row share one width. Through flex only: a width
-   would set the smallest size of the row and push it out of a 320 px screen. */
+/* Buttons at the end of a row share one width. WebKit sizes the row from the
+   width, not from the flex basis: without it, the buttons leave their card in
+   Safari. On a narrow screen the width gives way (see the end of this file). */
 .fixed-btn {
   flex: 0 0 160px;
+  width: 160px;
 }
 
 .small-btn {
@@ -371,7 +373,10 @@ ul.message {
     justify-content: flex-end;
   }
 
+  /* A width would set the smallest size of the row and push it out of a
+     320 px screen */
   .fixed-btn {
     flex: 1 1 140px;
+    width: auto;
   }
 }

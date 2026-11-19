@@ -74,6 +74,12 @@ body {
 /* =========================
    Buttons
 ========================= */
+/* WebKit gives the buttons the small font of the system (11 px), Chromium and Firefox
+   13.333 px: every button gets the latter, the size of the links drawn as buttons */
+button {
+  font-size: 13.333px;
+}
+
 .primary-btn {
   padding: 0.6rem 1.2rem;
   border-radius: 14px;
