@@ -76,7 +76,7 @@ Without a session: `401`. Without the header: `403`. A failed check: `422` with 
 | `data/hidden/` | Hidden: kept on disk, not loaded, no memory used. |
 | `data/building/` | Being built; moved to `data/` once the model generates words. |
 | `<name>.stats`, next to the model | Its size, written once it was loaded and moved with it: a hidden model shows its figures after a restart. |
-| `<name>.label`, next to the model | Its display name, if any, moved and deleted with it. `GET /v1/labels` serves the ones of the shown models. |
+| `<name>.label`, next to the model | Its display name, if any, moved and deleted with it; empty once the display name is removed, so that its date dates the removal. `GET /v1/labels` serves the ones of the shown models. |
 
 A model on its way goes through these statuses, one model at a time:
 

@@ -279,20 +279,15 @@ impl Catalog {
 		(!label.is_empty()).then(|| label.to_owned())
 	}
 
-	/// Writes the display name of the model `name` of `dir`, or removes it for `None`.
-	fn write_label(dir: &Path, name: &str, label: Option<&str>) -> std::io::Result<()> {
+	/// Writes the display name of the model `name` of `dir`. An empty name leaves the file
+	/// empty rather than removing it: its date records the removal, which the modification
+	/// date of the model then shows.
+	fn write_label(dir: &Path, name: &str, label: &str) -> std::io::Result<()> {
 		let path = Self::label(dir, name);
-		match label {
-			Some(label) => {
-				let temporary = path.with_extension("label.tmp");
-				std::fs::write(&temporary, format!("{}\n", label))?;
-				std::fs::rename(&temporary, &path)
-			}
-			None => match std::fs::remove_file(&path) {
-				Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
-				_ => Ok(()),
-			},
-		}
+		let temporary = path.with_extension("label.tmp");
+		let text = if label.is_empty() { String::new() } else { format!("{}\n", label) };
+		std::fs::write(&temporary, text)?;
+		std::fs::rename(&temporary, &path)
 	}
 
 	/// Display names of the shown models, by name: what the generator page shows.
@@ -304,7 +299,8 @@ impl Catalog {
 			.collect()
 	}
 
-	/// Gives a display name to a shown or hidden model, or removes it for `None`.
+	/// Gives a display name to a shown or hidden model, or removes it for `None`: the file
+	/// stays, empty, so that the removal dates the model.
 	///
 	/// # Errors
 	/// Returns a conflict if the model is on its way or failed, not found if no model has this name.
@@ -317,7 +313,7 @@ impl Catalog {
 			.into_iter()
 			.find(|dir| Self::dat(dir, name).exists())
 			.ok_or_else(|| AdminError::NotFound(format!("No model named '{}'", name)))?;
-		Self::write_label(&dir, name, label)?;
+		Self::write_label(&dir, name, label.unwrap_or_default())?;
 		Ok(())
 	}
 
@@ -598,7 +594,10 @@ impl Catalog {
 		// A cache left by an interrupted build would be read instead of the new text
 		remove_model_files(&building, name)?;
 		std::fs::write(Self::dat(&building, name), bytes)?;
-		Self::write_label(&building, name, label)?;
+		// A model added without a display name has no display name file
+		if let Some(label) = label {
+			Self::write_label(&building, name, label)?;
+		}
 		jobs.insert(name.to_owned(), Job { step: Step::Learning(Arc::new(LearnProgress::default())) });
 		Ok(())
 	}
@@ -869,7 +868,8 @@ mod tests {
 		assert!(f.loaded("fruits") && f.dir.join("fruits.dat").exists());
 		f.catalog.set_label("fruits", None).unwrap();
 		assert_eq!(label_of(&f, "fruits"), None);
-		assert!(!f.dir.join("fruits.label").exists());
+		// The file stays, empty: its date records the removal
+		assert_eq!(std::fs::read_to_string(f.dir.join("fruits.label")).unwrap(), "");
 		assert!(f.catalog.labels().is_empty());
 	}
 
@@ -882,6 +882,22 @@ mod tests {
 		let modified = |f: &Fixture| f.catalog.list().unwrap().into_iter().find(|model| model.name == "fruits").unwrap().modified;
 		assert_eq!(modified(&f), Some(1_600_000_000));
 		f.catalog.set_label("fruits", Some("Fruits")).unwrap();
+		assert!(modified(&f).unwrap() > 1_600_000_000, "{:?}", modified(&f));
+	}
+
+	#[test]
+	fn removing_the_display_name_changes_the_modification_date() {
+		let f = fixture("label-removed-date", &[("fruits", "pomme\n")]);
+		// A text file and a display name both written long ago
+		let long_ago = UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+		f.catalog.set_label("fruits", Some("Fruits")).unwrap();
+		for file in ["fruits.dat", "fruits.label"] {
+			std::fs::File::options().write(true).open(f.dir.join(file)).unwrap().set_modified(long_ago).unwrap();
+		}
+		let modified = |f: &Fixture| f.catalog.list().unwrap().into_iter().find(|model| model.name == "fruits").unwrap().modified;
+		assert_eq!(modified(&f), Some(1_600_000_000));
+		f.catalog.set_label("fruits", None).unwrap();
+		assert_eq!(label_of(&f, "fruits"), None);
 		assert!(modified(&f).unwrap() > 1_600_000_000, "{:?}", modified(&f));
 	}
 
