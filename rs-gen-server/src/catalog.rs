@@ -506,7 +506,7 @@ impl Catalog {
 	fn load_and_show(&self, generator: &RwLock<Generator>, name: &str) -> Result<(), String> {
 		let hidden = self.hidden_dir();
 		let dat = Self::dat(&hidden, name);
-		let model = match MultiGramModel::from_cache(&dat).map_err(|e| format!("Cannot read the cache: {}", e))? {
+		let model = match MultiGramModel::from_cache(&dat).map_err(|e| format!("Cannot read the model file: {}", e))? {
 			Some(model) => model,
 			// No cache: the model is learned from its text file, then its cache is written
 			None => {
@@ -514,7 +514,7 @@ impl Catalog {
 				self.set_step(name, Step::Learning(Arc::clone(&progress)));
 				let model = MultiGramModel::learn_file(&dat, &progress).map_err(|e| format!("Cannot learn the model: {}", e))?;
 				self.set_step(name, Step::Saving);
-				model.save_cache(&dat).map_err(|e| format!("Cannot write the cache: {}", e))?;
+				model.save_cache(&dat).map_err(|e| format!("Cannot write the model file: {}", e))?;
 				model
 			}
 		};
@@ -635,7 +635,7 @@ impl Catalog {
 		self.set_step(name, Step::Learning(Arc::clone(&progress)));
 		let model = MultiGramModel::learn_file(&dat, &progress).map_err(|e| format!("Cannot build the model: {}", e))?;
 		self.set_step(name, Step::Saving);
-		model.save_cache(&dat).map_err(|e| format!("Cannot write the cache: {}", e))?;
+		model.save_cache(&dat).map_err(|e| format!("Cannot write the model file: {}", e))?;
 		self.set_step(name, Step::Testing);
 		let model = smoke_test(model)?;
 		let known = Known::of(&model);
@@ -1030,6 +1030,24 @@ mod tests {
 		assert!(fruits.error.is_some());
 		assert!(!f.loaded("fruits"));
 		assert!(f.dir.join("hidden/fruits.dat").exists());
+	}
+
+	#[test]
+	fn a_model_file_that_cannot_be_written_is_named_as_on_the_admin_page() {
+		// The admin page calls the .bin file the model file: the reason of a failure does too.
+		// A directory where the model file is first written makes the write fail.
+		let f = fixture("save-failed", &[("fruits", "pomme\n")]);
+		f.catalog.hide(&f.generator, "fruits").unwrap();
+		std::fs::remove_file(f.dir.join("hidden/fruits.bin")).unwrap();
+		std::fs::create_dir(f.dir.join("hidden/fruits.bin.tmp")).unwrap();
+		f.show("fruits", Room::default(), false).unwrap();
+		f.catalog.reserve("legumes", b"chou\n", None).unwrap();
+		std::fs::create_dir(f.dir.join("building/legumes.bin.tmp")).unwrap();
+		f.catalog.build(&f.generator, "legumes");
+		for name in ["fruits", "legumes"] {
+			let error = entries(&f, name).remove(0).error.unwrap_or_else(|| panic!("{} has no reason", name));
+			assert!(error.starts_with("Cannot write the model file: "), "{}: {}", name, error);
+		}
 	}
 
 	// The entries of the list named `name`
