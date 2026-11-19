@@ -28,11 +28,12 @@ Each crate has a single responsibility and can be used independently. Each direc
 ### Development
 
 ```
-cargo test
-cargo clippy --all-targets
+bash scripts/verify.sh
 ```
 
-Rustc and clippy warnings are errors in every crate. The [CI](.github/workflows/ci.yml) builds the workspace, runs clippy and the tests on Linux, macOS and Windows for every push to `main` and every pull request.
+[`scripts/verify.sh`](scripts/verify.sh) runs the checks to pass before a commit, one line PASS, FAIL or NOT RUN each: it searches the text files (long dashes, invisible characters, secrets, machine paths, line endings), checks the syntax of the front scripts with `node --check`, then builds, runs clippy and the tests with the versions of `Cargo.lock`. `--search-only` runs the searches alone. It needs bash 3.2 or later, git and perl; without node or cargo, their checks are NOT RUN.
+
+Rustc and clippy warnings are errors in every crate, and unsafe code is forbidden. The [CI](.github/workflows/ci.yml) builds the workspace, runs clippy and the tests on Linux, macOS and Windows for every push to `main` and every pull request.
 
 ---
 
@@ -193,5 +194,7 @@ Features:
 * visualization of generated words
 
 `admin.html` is the admin page: login, list of the models, check and addition of a text file, hide, show and delete.
+
+The accessibility rules of both pages (WCAG 2.2 AA), and what checks them, are in the [README of the front](simple-web-front/README.md#accessibility).
 
 The UI is deliberately minimal and may evolve over time.
