@@ -24,11 +24,11 @@ Training files of the generator. Each `<name>.dat` file becomes a model called `
 | `us_tv_and_film.dat` | 18 999 | words of US TV shows and films |
 | `ville.dat` | 39 201 | French towns, in capitals and without accents |
 
-## Binary cache
+## Model files
 
-The first load of `<name>.dat` learns the model and writes `<name>.bin` next to it; the next loads read the `.bin` file. The cache starts with a version header, so a cache written by another version of `rs-gen-core`, or a damaged one, is rebuilt. `.bin` files are not versioned (`.gitignore`).
+The first load of `<name>.dat` learns the model and writes `<name>.bin` next to it; the next loads read the `.bin` file. The model file starts with a version header, so a model file written by another version of `rs-gen-core`, or a damaged one, is rebuilt. `.bin` files are not versioned (`.gitignore`).
 
-Learning needs more memory than loading. Measured on an Apple M1 Pro: `english.dat` peaks at 924 MB while it is learned on ten processors, against 410 MB to load it from its cache; on one processor, learning peaks at about 1.3 times the loaded model. On a small server, the admin page checks the memory before learning a new model.
+Learning needs more memory than loading. Measured on an Apple M1 Pro: `english.dat` peaks at 924 MB while it is learned on ten processors, against 410 MB to load it from its model file; on one processor, learning peaks at about 1.3 times the loaded model. On a small server, the admin page checks the memory before learning a new model.
 
 ## Adding a model
 

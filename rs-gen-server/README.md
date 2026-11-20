@@ -83,9 +83,9 @@ A model on its way goes through these statuses, one model at a time:
 | Status | Meaning |
 |---|---|
 | `learning` | Its text file is being learned, with the share of the lines learned (`progress`, from 0 to 1). |
-| `saving` | Its binary cache is being written. |
+| `saving` | Its model file is being written. |
 | `testing` | A new model generates a few words, to check that it works. |
-| `loading` | A hidden model is read from its binary cache; without a cache, it is learned and saved first. |
+| `loading` | A hidden model is read from its model file; without one, it is learned and saved first. |
 | `failed` | The addition failed; the model can be deleted. |
 
 `Generator::new` reads only the files directly in `data/`, so hidden models stay hidden after a restart.
@@ -138,4 +138,4 @@ This needs a musl cross linker, declared in `~/.cargo/config.toml`:
 linker = "x86_64-linux-musl-gcc"
 ```
 
-Copy the binary next to a `data/` directory holding the `.dat` files and their `.bin` cache (see [data/README.md](../data/README.md) for the memory needed to build a cache).
+Copy the binary next to a `data/` directory holding the `.dat` files and their `.bin` model files (see [data/README.md](../data/README.md) for the memory needed to build a model file).

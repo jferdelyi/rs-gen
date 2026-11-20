@@ -349,10 +349,6 @@ input[type="checkbox"] {
   overflow-wrap: break-word;
 }
 
-.hidden-slider {
-  display: none;
-}
-
 /* =========================
    Responsive
 ========================= */

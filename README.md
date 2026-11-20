@@ -117,9 +117,9 @@ The `Generator` is the high-level entry point. While raw N-gram and MultiGram mo
 
 ➡️ **No networking and no UI dependencies**: the only I/O is loading the models from a directory.
 
-### Binary cache
+### Model files
 
-Each `<name>.dat` model is learned once, then cached as `<name>.bin` next to it. The cache starts with a version header: a cache written by another version of the crate, or a damaged one, is rebuilt from its `.dat` file. The cache is read and written as a stream, never held whole in memory.
+Each `<name>.dat` model is learned once, then saved as its model file `<name>.bin` next to it. The model file starts with a version header: a model file written by another version of the crate, or a damaged one, is rebuilt from its `.dat` file. The model file is read and written as a stream, never held whole in memory.
 
 ---
 
