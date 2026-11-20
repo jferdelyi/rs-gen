@@ -79,7 +79,7 @@ impl State {
 			return;
 		}
 		// A new transition: the others are reallocated at their exact size, since they stay few
-		let mut others = self.others.take().map(|others| others.into_vec()).unwrap_or_default();
+		let mut others = self.others.take().map(<[(char, u32)]>::into_vec).unwrap_or_default();
 		others.push((next_char, occurrences));
 		self.others = Some(others.into_boxed_slice());
 	}
@@ -203,7 +203,7 @@ mod tests {
 		let state = state_with(&observed);
 		let count_a = (0..1000).filter(|_| state.predict() == Some('a')).count();
 		// Expected around 990; 900 leaves a very wide margin against bad luck
-		assert!(count_a > 900, "'a' predicted {} times out of 1000", count_a);
+		assert!(count_a > 900, "'a' predicted {count_a} times out of 1000");
 	}
 
 	#[test]
@@ -218,6 +218,6 @@ mod tests {
 	fn state_stays_small() {
 		// Millions of states are loaded at once: any extra byte here is multiplied
 		let size = std::mem::size_of::<State>();
-		assert!(size <= 24, "a state takes {} bytes", size);
+		assert!(size <= 24, "a state takes {size} bytes");
 	}
 }

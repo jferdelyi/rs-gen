@@ -72,7 +72,7 @@ impl GenerateParams {
 		match self.nb_try {
 			None => Ok(5),
 			Some(n) if n <= MAX_NB_TRY => Ok(n),
-			Some(n) => Err(format!("nb_try must be at most {}, got {}", MAX_NB_TRY, n)),
+			Some(n) => Err(format!("nb_try must be at most {MAX_NB_TRY}, got {n}")),
 		}
 	}
 
@@ -168,7 +168,7 @@ async fn get_generated(
 		for data in intensity_str.split(',') {
 			let split: Vec<&str> = data.split(':').collect();
 			if split.len() != 2 {
-				return HttpResponse::BadRequest().body(format!("Invalid intensity format: {}", data));
+				return HttpResponse::BadRequest().body(format!("Invalid intensity format: {data}"));
 			}
 			let model_name = split[0];
 			let intensity = match split[1].parse::<f32>() {
@@ -227,7 +227,7 @@ pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
 async fn main() -> std::io::Result<()> {
 	if std::env::args().nth(1).as_deref() == Some("hash-password") {
 		if let Err(e) = auth::run_hash_password() {
-			eprintln!("{}", e);
+			eprintln!("{e}");
 			std::process::exit(1);
 		}
 		return Ok(());
@@ -241,13 +241,13 @@ async fn main() -> std::io::Result<()> {
 			None
 		}
 		Err(e) => {
-			eprintln!("admin: disabled, {}", e);
+			eprintln!("admin: disabled, {e}");
 			None
 		}
 	};
 	let state = match AppState::new("./data", auth) {
 		Ok(s) => web::Data::new(s),
-		Err(e) => panic!("Failed to load model: {}", e),
+		Err(e) => panic!("Failed to load model: {e}"),
 	};
 
 	HttpServer::new(move || {

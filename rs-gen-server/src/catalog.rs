@@ -231,7 +231,7 @@ impl Catalog {
 			if Known::read(&data_dir, name) != Some(*size)
 				&& let Err(e) = size.save(&data_dir, name)
 			{
-				eprintln!("admin: cannot write the size of '{}': {}", name, e);
+				eprintln!("admin: cannot write the size of '{name}': {e}");
 			}
 		}
 		Self {
@@ -254,22 +254,22 @@ impl Catalog {
 
 	/// Text file of the model `name` in `dir`.
 	fn dat(dir: &Path, name: &str) -> PathBuf {
-		dir.join(format!("{}.dat", name))
+		dir.join(format!("{name}.dat"))
 	}
 
 	/// Binary cache of the model `name` in `dir`.
 	fn bin(dir: &Path, name: &str) -> PathBuf {
-		dir.join(format!("{}.bin", name))
+		dir.join(format!("{name}.bin"))
 	}
 
 	/// Size file of the model `name` in `dir`.
 	fn stats(dir: &Path, name: &str) -> PathBuf {
-		dir.join(format!("{}.stats", name))
+		dir.join(format!("{name}.stats"))
 	}
 
 	/// Display name file of the model `name` in `dir`.
 	fn label(dir: &Path, name: &str) -> PathBuf {
-		dir.join(format!("{}.label", name))
+		dir.join(format!("{name}.label"))
 	}
 
 	/// Reads the display name of the model `name` of `dir`, `None` if it has none.
@@ -285,7 +285,7 @@ impl Catalog {
 	fn write_label(dir: &Path, name: &str, label: &str) -> std::io::Result<()> {
 		let path = Self::label(dir, name);
 		let temporary = path.with_extension("label.tmp");
-		let text = if label.is_empty() { String::new() } else { format!("{}\n", label) };
+		let text = if label.is_empty() { String::new() } else { format!("{label}\n") };
 		std::fs::write(&temporary, text)?;
 		std::fs::rename(&temporary, &path)
 	}
@@ -307,12 +307,12 @@ impl Catalog {
 	pub(crate) fn set_label(&self, name: &str, label: Option<&str>) -> Result<(), AdminError> {
 		let jobs = lock(&self.jobs);
 		if jobs.contains_key(name) {
-			return Err(AdminError::Conflict(format!("The model '{}' is being added or shown, or its addition failed: wait for it to end", name)));
+			return Err(AdminError::Conflict(format!("The model '{name}' is being added or shown, or its addition failed: wait for it to end")));
 		}
 		let dir = [self.data_dir.clone(), self.hidden_dir()]
 			.into_iter()
 			.find(|dir| Self::dat(dir, name).exists())
-			.ok_or_else(|| AdminError::NotFound(format!("No model named '{}'", name)))?;
+			.ok_or_else(|| AdminError::NotFound(format!("No model named '{name}'")))?;
 		Self::write_label(&dir, name, label.unwrap_or_default())?;
 		Ok(())
 	}
@@ -353,7 +353,7 @@ impl Catalog {
 				stats: size.map(|size| size.stats),
 				transitions: size.map(|size| size.transitions),
 				estimated_bytes: size.map(|size| size.stats.estimated_bytes()),
-				dat_bytes: dat.as_ref().map(|metadata| metadata.len()),
+				dat_bytes: dat.as_ref().map(std::fs::Metadata::len),
 				bin_bytes: std::fs::metadata(Self::bin(dir, &name)).ok().map(|metadata| metadata.len()),
 				modified: Self::modified(dir, &name),
 				name,
@@ -399,7 +399,7 @@ impl Catalog {
 	pub(crate) fn hide(&self, generator: &RwLock<Generator>, name: &str) -> Result<(), AdminError> {
 		let jobs = lock(&self.jobs);
 		if jobs.get(name).is_some_and(Job::running) {
-			return Err(AdminError::Conflict(format!("The model '{}' is being shown: wait for it to end", name)));
+			return Err(AdminError::Conflict(format!("The model '{name}' is being shown: wait for it to end")));
 		}
 		if !Self::dat(&self.data_dir, name).exists() {
 			return Err(self.not_shown(name));
@@ -416,9 +416,9 @@ impl Catalog {
 	/// Error for an action on a model that should be shown.
 	fn not_shown(&self, name: &str) -> AdminError {
 		if Self::dat(&self.hidden_dir(), name).exists() {
-			AdminError::Conflict(format!("The model '{}' is already hidden", name))
+			AdminError::Conflict(format!("The model '{name}' is already hidden"))
 		} else {
-			AdminError::NotFound(format!("No model named '{}'", name))
+			AdminError::NotFound(format!("No model named '{name}'"))
 		}
 	}
 
@@ -431,18 +431,18 @@ impl Catalog {
 	pub(crate) fn show(&self, name: &str, room: Room, force: bool) -> Result<(), AdminError> {
 		let mut jobs = lock(&self.jobs);
 		if jobs.get(name).is_some_and(Job::running) {
-			return Err(AdminError::Conflict(format!("The model '{}' is already being shown", name)));
+			return Err(AdminError::Conflict(format!("The model '{name}' is already being shown")));
 		}
 		let hidden = self.hidden_dir();
 		if !Self::dat(&hidden, name).exists() {
 			return Err(if Self::dat(&self.data_dir, name).exists() {
-				AdminError::Conflict(format!("The model '{}' is already shown", name))
+				AdminError::Conflict(format!("The model '{name}' is already shown"))
 			} else {
-				AdminError::NotFound(format!("No model named '{}'", name))
+				AdminError::NotFound(format!("No model named '{name}'"))
 			});
 		}
 		if Self::dat(&self.data_dir, name).exists() {
-			return Err(AdminError::Conflict(format!("A shown model is already named '{}'", name)));
+			return Err(AdminError::Conflict(format!("A shown model is already named '{name}'")));
 		}
 		// One model added or shown at a time: each one takes much memory
 		if jobs.values().any(Job::running) {
@@ -483,9 +483,9 @@ impl Catalog {
 		let mut jobs = lock(&self.jobs);
 		jobs.remove(name);
 		match result {
-			Ok(()) => eprintln!("admin: model '{}' loaded", name),
+			Ok(()) => eprintln!("admin: model '{name}' loaded"),
 			Err(error) => {
-				eprintln!("admin: model '{}' not loaded: {}", name, error);
+				eprintln!("admin: model '{name}' not loaded: {error}");
 				lock(&self.errors).insert(name.to_owned(), error);
 			}
 		}
@@ -502,25 +502,25 @@ impl Catalog {
 	fn load_and_show(&self, generator: &RwLock<Generator>, name: &str) -> Result<(), String> {
 		let hidden = self.hidden_dir();
 		let dat = Self::dat(&hidden, name);
-		let model = match MultiGramModel::from_cache(&dat).map_err(|e| format!("Cannot read the model file: {}", e))? {
+		let model = match MultiGramModel::from_cache(&dat).map_err(|e| format!("Cannot read the model file: {e}"))? {
 			Some(model) => model,
 			// No cache: the model is learned from its text file, then its cache is written
 			None => {
 				let progress = Arc::new(LearnProgress::default());
 				self.set_step(name, Step::Learning(Arc::clone(&progress)));
-				let model = MultiGramModel::learn_file(&dat, &progress).map_err(|e| format!("Cannot learn the model: {}", e))?;
+				let model = MultiGramModel::learn_file(&dat, &progress).map_err(|e| format!("Cannot learn the model: {e}"))?;
 				self.set_step(name, Step::Saving);
-				model.save_cache(&dat).map_err(|e| format!("Cannot write the model file: {}", e))?;
+				model.save_cache(&dat).map_err(|e| format!("Cannot write the model file: {e}"))?;
 				model
 			}
 		};
 		let known = Known::of(&model);
 		if let Err(e) = known.save(&hidden, name) {
-			eprintln!("admin: cannot write the size of '{}': {}", name, e);
+			eprintln!("admin: cannot write the size of '{name}': {e}");
 		}
-		move_model(&hidden, &self.data_dir, name).map_err(|e| format!("Cannot move the model files: {:?}", e))?;
+		move_model(&hidden, &self.data_dir, name).map_err(|e| format!("Cannot move the model files: {e:?}"))?;
 		lock(&self.known).insert(name.to_owned(), known);
-		let inserted = write(generator).map_err(|e| format!("{:?}", e)).and_then(|mut generator| generator.insert_model(model));
+		let inserted = write(generator).map_err(|e| format!("{e:?}")).and_then(|mut generator| generator.insert_model(model));
 		if let Err(error) = inserted {
 			let _ = move_model(&self.data_dir, &hidden, name);
 			return Err(error);
@@ -552,7 +552,7 @@ impl Catalog {
 		let mut jobs = lock(&self.jobs);
 		match jobs.get(name) {
 			Some(job) if job.running() => {
-				return Err(AdminError::Conflict(format!("The model '{}' is being added or shown: wait for it to end", name)));
+				return Err(AdminError::Conflict(format!("The model '{name}' is being added or shown: wait for it to end")));
 			}
 			Some(_) => {
 				jobs.remove(name);
@@ -569,7 +569,7 @@ impl Catalog {
 		} else if Self::dat(&self.hidden_dir(), name).exists() {
 			remove_model_files(&self.hidden_dir(), name)?;
 		} else {
-			return Err(AdminError::NotFound(format!("No model named '{}'", name)));
+			return Err(AdminError::NotFound(format!("No model named '{name}'")));
 		}
 		lock(&self.known).remove(name);
 		lock(&self.errors).remove(name);
@@ -587,7 +587,7 @@ impl Catalog {
 			return Err(Self::busy());
 		}
 		if jobs.contains_key(name) || self.on_disk(name) {
-			return Err(AdminError::Conflict(format!("A model named '{}' already exists", name)));
+			return Err(AdminError::Conflict(format!("A model named '{name}' already exists")));
 		}
 		let building = self.building_dir();
 		std::fs::create_dir_all(&building)?;
@@ -610,10 +610,10 @@ impl Catalog {
 		match result {
 			Ok(()) => {
 				jobs.remove(name);
-				eprintln!("admin: model '{}' built", name);
+				eprintln!("admin: model '{name}' built");
 			}
 			Err(error) => {
-				eprintln!("admin: model '{}' not built: {}", name, error);
+				eprintln!("admin: model '{name}' not built: {error}");
 				let _ = remove_model_files(&self.building_dir(), name);
 				jobs.insert(name.to_owned(), Job { step: Step::Failed(error) });
 			}
@@ -632,18 +632,18 @@ impl Catalog {
 		let dat = Self::dat(&building, name);
 		let progress = Arc::new(LearnProgress::default());
 		self.set_step(name, Step::Learning(Arc::clone(&progress)));
-		let model = MultiGramModel::learn_file(&dat, &progress).map_err(|e| format!("Cannot build the model: {}", e))?;
+		let model = MultiGramModel::learn_file(&dat, &progress).map_err(|e| format!("Cannot build the model: {e}"))?;
 		self.set_step(name, Step::Saving);
-		model.save_cache(&dat).map_err(|e| format!("Cannot write the model file: {}", e))?;
+		model.save_cache(&dat).map_err(|e| format!("Cannot write the model file: {e}"))?;
 		self.set_step(name, Step::Testing);
 		let model = smoke_test(model)?;
 		let known = Known::of(&model);
 		if let Err(e) = known.save(&building, name) {
-			eprintln!("admin: cannot write the size of '{}': {}", name, e);
+			eprintln!("admin: cannot write the size of '{name}': {e}");
 		}
-		move_model(&building, &self.data_dir, name).map_err(|e| format!("Cannot move the model files: {:?}", e))?;
+		move_model(&building, &self.data_dir, name).map_err(|e| format!("Cannot move the model files: {e:?}"))?;
 		lock(&self.known).insert(name.to_owned(), known);
-		write(generator).map_err(|e| format!("{:?}", e))?.insert_model(model)
+		write(generator).map_err(|e| format!("{e:?}"))?.insert_model(model)
 	}
 }
 
@@ -656,7 +656,7 @@ fn smoke_test(model: MultiGramModel) -> Result<MultiGramModel, String> {
 	input.set_model_intensity(&name, 1.0)?;
 	input.nb_try = 0;
 	for _ in 0..SMOKE_TEST_WORDS {
-		probe.predict(&input).map_err(|e| format!("The model does not generate words: {}", e))?;
+		probe.predict(&input).map_err(|e| format!("The model does not generate words: {e}"))?;
 	}
 	probe.remove_model(&name).ok_or_else(|| "The model was lost during its test".to_owned())
 }
@@ -702,7 +702,7 @@ fn move_model(from: &Path, to: &Path, name: &str) -> Result<(), AdminError> {
 	if label.exists()
 		&& let Err(e) = std::fs::rename(&label, Catalog::label(to, name))
 	{
-		eprintln!("admin: the display name of '{}' did not follow the model: {}", name, e);
+		eprintln!("admin: the display name of '{name}' did not follow the model: {e}");
 	}
 	Ok(())
 }
@@ -722,7 +722,7 @@ fn remove_model_files(dir: &Path, name: &str) -> Result<(), AdminError> {
 /// Locks a table of the catalog. Each change is a single insert or remove, so a table
 /// is never half written: a poisoned lock is used as is.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-	mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+	mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Locks the generator for a change.
@@ -752,7 +752,7 @@ mod tests {
 		let _ = std::fs::remove_dir_all(&dir);
 		std::fs::create_dir_all(&dir).unwrap();
 		for (name, lines) in models {
-			std::fs::write(dir.join(format!("{}.dat", name)), lines).unwrap();
+			std::fs::write(dir.join(format!("{name}.dat")), lines).unwrap();
 		}
 		let generator = Generator::new(&dir).unwrap();
 		let catalog = Catalog::new(&dir, &generator);
@@ -825,7 +825,7 @@ mod tests {
 		let f = fixture("show-memory", &[("fruits", "pomme\npoire\n")]);
 		f.catalog.hide(&f.generator, "fruits").unwrap();
 		let result = f.show("fruits", ram(Some(MEMORY_MARGIN_BYTES)), false);
-		assert!(matches!(result, Err(AdminError::NotEnoughMemory(_))), "{:?}", result);
+		assert!(matches!(result, Err(AdminError::NotEnoughMemory(_))), "{result:?}");
 		assert_eq!(f.status("fruits"), Some(Status::Hidden));
 		f.show("fruits", ram(Some(2 * MEMORY_MARGIN_BYTES)), false).unwrap();
 	}
@@ -836,7 +836,7 @@ mod tests {
 		f.catalog.hide(&f.generator, "fruits").unwrap();
 		let room = Room { ram_bytes: Some(MEMORY_MARGIN_BYTES), with_swap_bytes: Some(2 * MEMORY_MARGIN_BYTES) };
 		let result = f.show("fruits", room, false);
-		assert!(matches!(result, Err(AdminError::MemoryRisk(_))), "{:?}", result);
+		assert!(matches!(result, Err(AdminError::MemoryRisk(_))), "{result:?}");
 		assert_eq!(f.status("fruits"), Some(Status::Hidden));
 		f.show("fruits", room, true).unwrap();
 		assert_eq!(f.status("fruits"), Some(Status::Shown));
@@ -849,7 +849,7 @@ mod tests {
 		f.catalog.hide(&f.generator, "fruits").unwrap();
 		let room = Room { ram_bytes: Some(MEMORY_MARGIN_BYTES), with_swap_bytes: Some(MEMORY_MARGIN_BYTES) };
 		let result = f.show("fruits", room, true);
-		assert!(matches!(result, Err(AdminError::NotEnoughMemory(_))), "{:?}", result);
+		assert!(matches!(result, Err(AdminError::NotEnoughMemory(_))), "{result:?}");
 		assert_eq!(f.status("fruits"), Some(Status::Hidden));
 	}
 
@@ -1061,8 +1061,8 @@ mod tests {
 		std::fs::create_dir(f.dir.join("building/legumes.bin.tmp")).unwrap();
 		f.catalog.build(&f.generator, "legumes");
 		for name in ["fruits", "legumes"] {
-			let error = entries(&f, name).remove(0).error.unwrap_or_else(|| panic!("{} has no reason", name));
-			assert!(error.starts_with("Cannot write the model file: "), "{}: {}", name, error);
+			let error = entries(&f, name).remove(0).error.unwrap_or_else(|| panic!("{name} has no reason"));
+			assert!(error.starts_with("Cannot write the model file: "), "{name}: {error}");
 		}
 	}
 
@@ -1079,7 +1079,7 @@ mod tests {
 		f.catalog.show("fruits", Room::default(), false).unwrap();
 		std::fs::rename(f.dir.join("hidden/fruits.dat"), f.dir.join("fruits.moving")).unwrap();
 		let listed = entries(&f, "fruits");
-		assert_eq!(listed.len(), 1, "{:?}", listed);
+		assert_eq!(listed.len(), 1, "{listed:?}");
 		assert_eq!(listed[0].status, Status::Loading);
 	}
 
@@ -1090,7 +1090,7 @@ mod tests {
 		f.catalog.reserve("legumes", b"chou\n", None).unwrap();
 		std::fs::copy(f.dir.join("building/legumes.dat"), f.dir.join("legumes.dat")).unwrap();
 		let listed = entries(&f, "legumes");
-		assert_eq!(listed.len(), 1, "{:?}", listed);
+		assert_eq!(listed.len(), 1, "{listed:?}");
 		assert_eq!(listed[0].status, Status::Learning);
 	}
 

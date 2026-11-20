@@ -212,7 +212,7 @@ impl NGramModel {
 		let drawn = rand::rng().random_range(0..count);
 		match self.frozen.entries.get(drawn) {
 			Some(entry) => Some(self.frozen.prefix(entry).to_owned()),
-			None => self.learning.keys().nth(drawn - self.frozen.entries.len()).map(|prefix| prefix.to_string()),
+			None => self.learning.keys().nth(drawn - self.frozen.entries.len()).map(std::string::ToString::to_string),
 		}
 	}
 
@@ -267,7 +267,7 @@ impl NGramModel {
 		} else {
 			let key: String = prefix
 				.chars()
-				.flat_map(|c| c.to_lowercase())
+				.flat_map(char::to_lowercase)
 				.collect();
 			self.get(key.as_str())
 		};
@@ -496,7 +496,7 @@ mod tests {
 		assert_eq!(NGramModel::new(3).unwrap().get_random_seed(), None);
 		let model = model_with(3, &["<abc>"]);
 		let seed = model.get_random_seed().expect("a model with states must give a seed");
-		assert!(["<a", "ab", "bc"].contains(&seed.as_str()), "unexpected seed {}", seed);
+		assert!(["<a", "ab", "bc"].contains(&seed.as_str()), "unexpected seed {seed}");
 	}
 
 	#[test]
@@ -539,12 +539,12 @@ mod tests {
 		assert_eq!(frozen.transition_count(), learning.transition_count());
 		// Every prefix is found, with the same state
 		for (prefix, transitions) in learning.dump() {
-			assert_eq!(frozen.get(&prefix).map(State::sorted_transitions), Some(transitions), "{}", prefix);
+			assert_eq!(frozen.get(&prefix).map(State::sorted_transitions), Some(transitions), "{prefix}");
 		}
 		// And the others are not
 		for absent in ["zzz", "<w9x", "é0>", "", "<w1x1é1>"] {
-			assert!(learning.get(absent).is_none(), "{} is a prefix of the model", absent);
-			assert!(frozen.get(absent).is_none(), "{} found in the frozen model", absent);
+			assert!(learning.get(absent).is_none(), "{absent} is a prefix of the model");
+			assert!(frozen.get(absent).is_none(), "{absent} found in the frozen model");
 		}
 	}
 
@@ -555,7 +555,7 @@ mod tests {
 		assert_eq!(frozen.predict("<a"), Some('b'));
 		assert_eq!(frozen.predict("zz"), None);
 		let seed = frozen.get_random_seed().unwrap();
-		assert!(["<a", "ab", "bc"].contains(&seed.as_str()), "unexpected seed {}", seed);
+		assert!(["<a", "ab", "bc"].contains(&seed.as_str()), "unexpected seed {seed}");
 		// An empty model has nothing to freeze nor to find
 		let mut empty = NGramModel::new(3).unwrap();
 		empty.shrink_to_fit();

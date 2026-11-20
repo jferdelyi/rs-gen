@@ -90,7 +90,7 @@ impl Auth {
 	/// Returns an error if the hash is not a valid PHC string.
 	pub(crate) fn new(password_hash: &str) -> Result<Self, String> {
 		let password_hash = password_hash.trim();
-		PasswordHash::new(password_hash).map_err(|e| format!("Invalid admin password hash: {}", e))?;
+		PasswordHash::new(password_hash).map_err(|e| format!("Invalid admin password hash: {e}"))?;
 		Ok(Self {
 			password_hash: Mutex::new(password_hash.to_owned()),
 			hash_file: None,
@@ -151,7 +151,7 @@ impl Auth {
 		}
 		let hash = hash_password(new).map_err(ChangeError::Invalid)?;
 		let Some(path) = &self.hash_file else {
-			return Err(ChangeError::NotSaved(format!("The hash is not read from a file: set {}", HASH_FILE_ENV)));
+			return Err(ChangeError::NotSaved(format!("The hash is not read from a file: set {HASH_FILE_ENV}")));
 		};
 		save_hash(path, &hash).map_err(|e| ChangeError::NotSaved(format!("Cannot save the new hash to {}: {}", path.display(), e)))?;
 		*lock(&self.password_hash) = hash;
@@ -193,7 +193,7 @@ impl Auth {
 	pub(crate) fn open_session(&self) -> String {
 		let mut bytes = [0u8; 32];
 		rand::rng().fill(&mut bytes);
-		let token: String = bytes.iter().map(|byte| format!("{:02x}", byte)).collect();
+		let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
 		let now = Instant::now();
 		let mut sessions = lock(&self.sessions);
 		sessions.retain(|_, end| *end > now);
@@ -244,7 +244,7 @@ fn save_hash(path: &Path, hash: &str) -> std::io::Result<()> {
 /// Locks a table of `Auth`. A panic while it was locked cannot leave it half written
 /// (each change is a single insert or remove), so a poisoned lock is used as is.
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-	mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+	mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Hashes a password with Argon2id and a random salt, as a PHC string.
@@ -254,15 +254,15 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// or longer than `MAX_PASSWORD_BYTES` bytes.
 pub(crate) fn hash_password(password: &str) -> Result<String, String> {
 	if password.chars().count() < MIN_PASSWORD_CHARS {
-		return Err(format!("The password must have at least {} characters", MIN_PASSWORD_CHARS));
+		return Err(format!("The password must have at least {MIN_PASSWORD_CHARS} characters"));
 	}
 	if password.len() > MAX_PASSWORD_BYTES {
-		return Err(format!("The password must have at most {} bytes", MAX_PASSWORD_BYTES));
+		return Err(format!("The password must have at most {MAX_PASSWORD_BYTES} bytes"));
 	}
 	Argon2::default()
 		.hash_password(password.as_bytes())
 		.map(|hash| hash.to_string())
-		.map_err(|e| format!("Cannot hash the password: {}", e))
+		.map_err(|e| format!("Cannot hash the password: {e}"))
 }
 
 /// `rs-gen-server hash-password`: reads a password on the standard input
@@ -272,7 +272,7 @@ pub(crate) fn hash_password(password: &str) -> Result<String, String> {
 /// Returns the message to show if the input cannot be read or the password is refused.
 pub(crate) fn run_hash_password() -> Result<(), String> {
 	let mut input = String::new();
-	std::io::stdin().read_to_string(&mut input).map_err(|e| format!("Cannot read the password: {}", e))?;
+	std::io::stdin().read_to_string(&mut input).map_err(|e| format!("Cannot read the password: {e}"))?;
 	let password = input.strip_suffix('\n').unwrap_or(&input);
 	let password = password.strip_suffix('\r').unwrap_or(password);
 	println!("{}", hash_password(password)?);

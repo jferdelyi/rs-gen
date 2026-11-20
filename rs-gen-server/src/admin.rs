@@ -150,7 +150,7 @@ async fn login(req: HttpRequest, state: web::Data<AppState>, body: web::Json<Log
 	if let Err(wait) = auth.begin_login(&client) {
 		return HttpResponse::TooManyRequests()
 			.insert_header(("Retry-After", wait.to_string()))
-			.json(ErrorBody { error: &format!("Too many failed logins: wait {} seconds", wait) });
+			.json(ErrorBody { error: &format!("Too many failed logins: wait {wait} seconds") });
 	}
 
 	let password = body.into_inner().password;
@@ -159,11 +159,11 @@ async fn login(req: HttpRequest, state: web::Data<AppState>, body: web::Json<Log
 		.await
 		.unwrap_or(false);
 	if !valid {
-		eprintln!("admin: failed login from {}", client);
+		eprintln!("admin: failed login from {client}");
 		return error_response(StatusCode::UNAUTHORIZED, "Wrong password");
 	}
 	auth.record_success(&client);
-	eprintln!("admin: login from {}", client);
+	eprintln!("admin: login from {client}");
 	HttpResponse::Ok().cookie(session_cookie(auth.open_session())).json(Done { ok: true })
 }
 
@@ -210,7 +210,7 @@ async fn change_password(req: HttpRequest, state: web::Data<AppState>, body: web
 	if let Err(wait) = auth.begin_login(&client) {
 		return HttpResponse::TooManyRequests()
 			.insert_header(("Retry-After", wait.to_string()))
-			.json(ErrorBody { error: &format!("Too many failed attempts: wait {} seconds", wait) });
+			.json(ErrorBody { error: &format!("Too many failed attempts: wait {wait} seconds") });
 	}
 
 	let PasswordBody { current, new } = body.into_inner();
@@ -222,7 +222,7 @@ async fn change_password(req: HttpRequest, state: web::Data<AppState>, body: web
 	// Past a wrong current password, the attempt was not a failed login: it is forgotten
 	match result {
 		Err(ChangeError::WrongPassword) => {
-			eprintln!("admin: failed password change from {}", client);
+			eprintln!("admin: failed password change from {client}");
 			error_response(StatusCode::FORBIDDEN, "Wrong current password")
 		}
 		Ok(()) => {
@@ -230,7 +230,7 @@ async fn change_password(req: HttpRequest, state: web::Data<AppState>, body: web
 			if let Some(cookie) = req.cookie(SESSION_COOKIE) {
 				auth.close_other_sessions(cookie.value());
 			}
-			eprintln!("admin: password changed from {}", client);
+			eprintln!("admin: password changed from {client}");
 			HttpResponse::Ok().json(Done { ok: true })
 		}
 		Err(ChangeError::Invalid(message)) => {
@@ -239,7 +239,7 @@ async fn change_password(req: HttpRequest, state: web::Data<AppState>, body: web
 		}
 		Err(ChangeError::NotSaved(message)) => {
 			auth.record_success(&client);
-			eprintln!("admin: password change from {} not saved: {}", client, message);
+			eprintln!("admin: password change from {client} not saved: {message}");
 			error_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
 		}
 	}
@@ -370,12 +370,12 @@ async fn add_model(state: web::Data<AppState>, query: web::Query<NameQuery>, bod
 			.name("model-build".to_owned())
 			.spawn(move || builder.catalog.build(&builder.generator, &built));
 		if let Err(e) = spawned {
-			state.catalog.abandon(&name, format!("Cannot start the build: {}", e));
+			state.catalog.abandon(&name, format!("Cannot start the build: {e}"));
 		}
 		if report.risks.is_empty() {
-			eprintln!("admin: model '{}' added", name);
+			eprintln!("admin: model '{name}' added");
 		} else {
-			eprintln!("admin: model '{}' added, forced: it uses swap", name);
+			eprintln!("admin: model '{name}' added, forced: it uses swap");
 		}
 		Addition::Started(report)
 	})
@@ -399,7 +399,7 @@ where
 	}
 	match web::block(move || action(&state, &name).map(|()| name)).await {
 		Ok(Ok(name)) => {
-			eprintln!("admin: model '{}' {}", name, verb);
+			eprintln!("admin: model '{name}' {verb}");
 			HttpResponse::Ok().json(Done { ok: true })
 		}
 		Ok(Err(error)) => admin_error(&error),
@@ -434,7 +434,7 @@ async fn show_model(state: web::Data<AppState>, path: web::Path<String>, query: 
 			.name("model-load".to_owned())
 			.spawn(move || loader.catalog.load(&loader.generator, &loaded));
 		if let Err(e) = spawned {
-			let error = format!("Cannot start the loading: {}", e);
+			let error = format!("Cannot start the loading: {e}");
 			state.catalog.abandon_show(&name, error.clone());
 			return Err(AdminError::Internal(error));
 		}
@@ -581,7 +581,7 @@ mod tests {
 		let _ = std::fs::remove_dir_all(&dir);
 		std::fs::create_dir_all(&dir).unwrap();
 		for (name, lines) in models {
-			std::fs::write(dir.join(format!("{}.dat", name)), lines).unwrap();
+			std::fs::write(dir.join(format!("{name}.dat")), lines).unwrap();
 		}
 		let mut state = AppState::new(&dir, auth).unwrap();
 		state.memory = memory;
@@ -665,7 +665,7 @@ mod tests {
 		let app = test::init_service(App::new().app_data(state).configure(crate::configure)).await;
 		for (method, path) in PROTECTED_ROUTES {
 			let response = test::call_service(&app, admin(method, path).to_request()).await;
-			assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{} {}", method, path);
+			assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{method} {path}");
 		}
 		// A made-up session is refused too
 		let forged = Cookie::new(SESSION_COOKIE, "0".repeat(64));
@@ -681,7 +681,7 @@ mod tests {
 		let cookie = login_cookie!(&app);
 		for (method, path) in PROTECTED_ROUTES.iter().chain(&[("POST", "/v1/admin/login")]) {
 			let response = test::call_service(&app, request(method, path).cookie(cookie.clone()).to_request()).await;
-			assert_eq!(response.status(), StatusCode::FORBIDDEN, "{} {}", method, path);
+			assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
 		}
 		let _ = std::fs::remove_dir_all(&dir);
 	}
@@ -930,7 +930,7 @@ mod tests {
 		let app = test::init_service(App::new().app_data(state).configure(crate::configure)).await;
 		let cookie = login_cookie!(&app);
 		let label = |name: &str, label: &str| {
-			admin("POST", &format!("/v1/admin/models/{}/label", name)).cookie(cookie.clone()).set_json(Label { label }).to_request()
+			admin("POST", &format!("/v1/admin/models/{name}/label")).cookie(cookie.clone()).set_json(Label { label }).to_request()
 		};
 		let public_labels = || TestRequest::get().uri("/v1/labels").to_request();
 

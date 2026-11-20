@@ -55,7 +55,7 @@ impl MemoryInfo {
 			..Self::default()
 		};
 		if let Some(dir) = std::fs::read_to_string("/proc/self/cgroup").ok().and_then(|text| cgroup_dir(&text)) {
-			let read = |file: &str| std::fs::read_to_string(format!("{}/{}", dir, file)).ok();
+			let read = |file: &str| std::fs::read_to_string(format!("{dir}/{file}")).ok();
 			info.service_limit_bytes = read("memory.max").and_then(|text| limit_value(&text));
 			info.service_used_bytes = read("memory.current").and_then(|text| text.trim().parse().ok());
 			info.service_swap_limit_bytes = read("memory.swap.max").and_then(|text| limit_value(&text));

@@ -761,7 +761,7 @@ mod tests {
 	#[test]
 	fn learn_file_counts_every_line() {
 		// More lines than one progress batch, over several processors
-		let text: String = (0..PROGRESS_STEP * 3 + 7).map(|i| format!("w{}\n", i)).collect();
+		let text: String = (0..PROGRESS_STEP * 3 + 7).map(|i| format!("w{i}\n")).collect();
 		let dir = test_dir("learn-progress");
 		let dat = dir.join("words.dat");
 		std::fs::write(&dat, &text).unwrap();
@@ -817,7 +817,7 @@ mod tests {
 		// A frozen state is a 32-byte entry and 4-byte index slots, at most 70 % used: about
 		// 38 bytes at least; measured 44 to 45 on the server
 		let per_state = stats.estimated_bytes() / 1000;
-		assert!((38..=50).contains(&per_state), "{} bytes per frozen state", per_state);
+		assert!((38..=50).contains(&per_state), "{per_state} bytes per frozen state");
 		// Learning goes through the hash table, at 88 bytes per state, 1.5 times at least
 		assert!(stats.estimated_build_bytes(0) >= 1000 * 88 * 3 / 2);
 	}
@@ -842,8 +842,8 @@ mod tests {
 		];
 		for text in texts {
 			let count = MultiGramModel::count_text(text, usize::MAX);
-			assert!(count.complete, "{:?}", text);
-			assert_eq!(count.stats, model_of(text).stats(), "{:?}", text);
+			assert!(count.complete, "{text:?}");
+			assert_eq!(count.stats, model_of(text).stats(), "{text:?}");
 		}
 	}
 

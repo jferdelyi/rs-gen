@@ -136,7 +136,7 @@ impl PredictionInput {
 	/// Returns an error if the model does not exist.
 	pub fn set_model_intensity(&mut self, model: &str, intensity: f32) -> Result<(), String> {
 		if !self.models_intensity.contains_key(model) {
-			return Err(format!("Model {} not found", model));
+			return Err(format!("Model {model} not found"));
 		}
 		if let Some(p) = self.models_intensity.get_mut(model) {
 			*p = intensity;

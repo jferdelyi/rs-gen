@@ -88,7 +88,7 @@ mod tests {
 		for a in 'a'..='z' {
 			for b in 'a'..='z' {
 				for c in 'a'..='z' {
-					keys.push(format!("{}{}{}", a, b, c));
+					keys.push(format!("{a}{b}{c}"));
 				}
 			}
 		}
@@ -99,7 +99,7 @@ mod tests {
 		}
 		let used = counts.iter().filter(|count| **count > 0).count();
 		// 17 576 keys in 4 096 buckets: a uniform hash leaves almost no bucket empty
-		assert!(used > buckets * 9 / 10, "only {} buckets used out of {}", used, buckets);
+		assert!(used > buckets * 9 / 10, "only {used} buckets used out of {buckets}");
 		assert!(counts.iter().max().unwrap() < &20, "a bucket holds {} keys", counts.iter().max().unwrap());
 	}
 

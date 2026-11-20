@@ -60,7 +60,7 @@ fn collect_rules(css: &str, found: &mut Vec<Rule>) {
 				_ => {}
 			}
 		}
-		let close = close.unwrap_or_else(|| panic!("unclosed block after '{}'", selector));
+		let close = close.unwrap_or_else(|| panic!("unclosed block after '{selector}'"));
 		let body = &rest[open + 1..close];
 		if body.contains('{') {
 			collect_rules(body, found);

@@ -120,7 +120,7 @@ pub(crate) fn check_label(label: &str) -> Result<Option<String>, String> {
 		return Ok(None);
 	}
 	if label.chars().count() > MAX_LABEL_CHARS {
-		return Err(format!("The display name has more than {} characters", MAX_LABEL_CHARS));
+		return Err(format!("The display name has more than {MAX_LABEL_CHARS} characters"));
 	}
 	if label.chars().any(char::is_control) {
 		return Err("The display name holds a line break, a tab or another control character".to_owned());
@@ -158,11 +158,10 @@ pub(crate) fn check_upload(name: &str, name_taken: bool, bytes: &[u8], room: Roo
 
 	if !is_valid_name(name) {
 		report.problems.push(format!(
-			"Invalid name: use 1 to {} lowercase letters, digits, '_' or '-', starting with a letter or a digit",
-			MAX_NAME_CHARS
+			"Invalid name: use 1 to {MAX_NAME_CHARS} lowercase letters, digits, '_' or '-', starting with a letter or a digit"
 		));
 	} else if name_taken {
-		report.problems.push(format!("A model named '{}' already exists", name));
+		report.problems.push(format!("A model named '{name}' already exists"));
 	}
 
 	if bytes.len() > MAX_UPLOAD_BYTES {
@@ -193,12 +192,12 @@ pub(crate) fn check_upload(name: &str, name_taken: bool, bytes: &[u8], room: Roo
 	match count.empty_lines {
 		0 => (),
 		1 => report.warnings.push("1 empty line: it is learned as an empty word".to_owned()),
-		lines => report.warnings.push(format!("{} empty lines: each one is learned as an empty word", lines)),
+		lines => report.warnings.push(format!("{lines} empty lines: each one is learned as an empty word")),
 	}
 	match text.lines().filter(|line| line.contains(['<', '>'])).count() {
 		0 => (),
 		1 => report.warnings.push("1 line contains '<' or '>', which mark the start and the end of a word".to_owned()),
-		lines => report.warnings.push(format!("{} lines contain '<' or '>', which mark the start and the end of a word", lines)),
+		lines => report.warnings.push(format!("{lines} lines contain '<' or '>', which mark the start and the end of a word")),
 	}
 
 	if count.complete {

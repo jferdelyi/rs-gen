@@ -136,7 +136,7 @@ impl Generator {
 	///
 	/// Provides a read-only reference to internal names.
 	pub fn get_model_names(&self) -> Vec<String> {
-		self.models.keys().map(|k| k.to_owned()).collect::<Vec<_>>()
+		self.models.keys().map(std::borrow::ToOwned::to_owned).collect::<Vec<_>>()
 	}
 
 	/// Loads a `MultiGramModel` from a file path.
@@ -164,7 +164,7 @@ impl Generator {
 	pub fn insert_model(&mut self, model: MultiGramModel) -> Result<(), String> {
 		let name = model.get_name().to_owned();
 		if self.models.contains_key(&name) {
-			return Err(format!("Model already loaded: {}", name));
+			return Err(format!("Model already loaded: {name}"));
 		}
 		self.models.insert(name, model);
 		Ok(())
@@ -353,8 +353,7 @@ impl Generator {
 	fn compute_randomness(randomness: f32, max: usize, default: usize) -> Result<usize, String> {
 		if !(0.0..=1.0).contains(&randomness) {
 			Err(format!(
-				"randomness must be between 0.0 and 1.0, got {}",
-				randomness
+				"randomness must be between 0.0 and 1.0, got {randomness}"
 			))?;
 		}
 
@@ -427,7 +426,7 @@ mod tests {
 		let _ = std::fs::remove_dir_all(&dir);
 		std::fs::create_dir_all(&dir).unwrap();
 		for (name, lines) in models {
-			std::fs::write(dir.join(format!("{}.dat", name)), lines).unwrap();
+			std::fs::write(dir.join(format!("{name}.dat")), lines).unwrap();
 		}
 		(Generator::new(&dir).unwrap(), dir)
 	}
@@ -464,7 +463,7 @@ mod tests {
 		let mut draw = ModelDraw::new(&models);
 		let heavy_first = (0..4000).filter(|_| std::ptr::eq(draw.restart(), &heavy)).count();
 		// Expected 3000, with a standard deviation of about 27
-		assert!((2700..=3300).contains(&heavy_first), "heavy drawn first {} times out of 4000", heavy_first);
+		assert!((2700..=3300).contains(&heavy_first), "heavy drawn first {heavy_first} times out of 4000");
 	}
 
 	#[test]
@@ -475,7 +474,7 @@ mod tests {
 		input.set_model_intensity("up", 0.0).unwrap();
 		for word in predict_within_deadline(generator, input, 100) {
 			let word = word.unwrap();
-			assert!(word.chars().all(|c| "abc".contains(c)), "unexpected word {}", word);
+			assert!(word.chars().all(|c| "abc".contains(c)), "unexpected word {word}");
 		}
 		let _ = std::fs::remove_dir_all(&dir);
 	}
@@ -487,7 +486,7 @@ mod tests {
 		input.start_seed = StartSeed::Custom("ab".to_owned());
 		for word in predict_within_deadline(generator, input, 20) {
 			let word = word.unwrap();
-			assert!(word == "abc" || word == "abd", "unexpected word {}", word);
+			assert!(word == "abc" || word == "abd", "unexpected word {word}");
 		}
 		let _ = std::fs::remove_dir_all(&dir);
 	}
@@ -499,7 +498,7 @@ mod tests {
 		input.start_seed = StartSeed::Random(3);
 		for word in predict_within_deadline(generator, input, 20) {
 			let word = word.unwrap();
-			assert!(["abc", "bc", "c"].contains(&word.as_str()), "unexpected word {}", word);
+			assert!(["abc", "bc", "c"].contains(&word.as_str()), "unexpected word {word}");
 		}
 		let _ = std::fs::remove_dir_all(&dir);
 	}
@@ -510,7 +509,7 @@ mod tests {
 		let mut input = generator.make_prediction_input();
 		input.start_seed = StartSeed::Custom("a€".to_owned());
 		for word in predict_within_deadline(generator, input, 3) {
-			assert!(word.is_err(), "no model knows '€', got {:?}", word);
+			assert!(word.is_err(), "no model knows '€', got {word:?}");
 		}
 		let _ = std::fs::remove_dir_all(&dir);
 	}
@@ -533,7 +532,7 @@ mod tests {
 	fn model_outside(dir: &Path, name: &str, lines: &str) -> MultiGramModel {
 		let other = dir.join("other");
 		std::fs::create_dir_all(&other).unwrap();
-		let path = other.join(format!("{}.dat", name));
+		let path = other.join(format!("{name}.dat"));
 		std::fs::write(&path, lines).unwrap();
 		MultiGramModel::new(&path).unwrap()
 	}
@@ -551,7 +550,7 @@ mod tests {
 		input.set_model_intensity("up", 1.0).unwrap();
 		for word in predict_within_deadline(generator, input, 20) {
 			let word = word.unwrap();
-			assert!(word.chars().all(|c| "xyz".contains(c)), "unexpected word {}", word);
+			assert!(word.chars().all(|c| "xyz".contains(c)), "unexpected word {word}");
 		}
 		let _ = std::fs::remove_dir_all(&dir);
 	}
