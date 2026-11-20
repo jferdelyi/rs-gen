@@ -258,6 +258,23 @@ fn the_keyboard_focus_is_drawn_with_the_focus_color() {
 }
 
 #[test]
+fn the_settings_dialog_opens_on_its_title() {
+	// Safari draws the keyboard focus on the first control a dialog focuses, even when the
+	// dialog was opened with the mouse: the settings open on their title, which is not a control
+	// and draws no ring, and Tab leads to the first slider
+	let tags = tags(&front("index.html"));
+	let dialog = tags.iter().position(|t| t.get("id") == Some("settings-modal")).expect("no #settings-modal in index.html");
+	let first = tags[dialog + 1..].iter().find(|t| t.get("autofocus").is_some()).expect("nothing has autofocus in the settings");
+	assert_eq!(first.get("id"), Some("settings-title"), "the settings open on another element than their title");
+	assert_eq!(first.get("tabindex"), Some("-1"), "the title can be reached with Tab");
+	let no_ring = STYLES.iter().flat_map(|f| rules(&front(f))).any(|rule| {
+		rule.selector.split(',').any(|s| s.trim() == "[tabindex=\"-1\"]:focus")
+			&& rule.declarations.iter().any(|(p, v)| p == "outline" && v == "none")
+	});
+	assert!(no_ring, "an element focused by script only draws the focus ring");
+}
+
+#[test]
 fn every_dialog_is_a_native_modal_dialog() {
 	for page in PAGES {
 		let tags = tags(&front(page));

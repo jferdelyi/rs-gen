@@ -328,6 +328,12 @@ input[type="checkbox"] {
   outline-offset: 2px;
 }
 
+/* An element focused by script only, such as the title a dialog opens on, is not a
+   control: no ring. Safari would draw one even after a mouse click. */
+[tabindex="-1"]:focus {
+  outline: none;
+}
+
 .hidden-slider {
   display: none;
 }

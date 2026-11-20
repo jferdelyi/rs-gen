@@ -75,8 +75,9 @@
   <dialog id="settings-modal" class="modal" aria-labelledby="settings-title">
     <div class="modal-content">
 
-      <!-- General Settings -->
-      <h3 id="settings-title">General Settings</h3>
+      <!-- General Settings. The dialog opens on its title: Safari would draw the focus ring
+           on the first slider, even after a mouse click. Tab leads to the slider. -->
+      <h3 id="settings-title" tabindex="-1" autofocus>General Settings</h3>
 
       <div class="input-group">
         <label for="randomness" class="label-title">
