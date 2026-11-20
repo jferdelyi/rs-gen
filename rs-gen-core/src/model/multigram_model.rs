@@ -18,6 +18,12 @@ pub(crate) const END_CHAR: char = '>';
 /// header is rebuilt from the text file instead of being misread.
 const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-4\n";
 
+/// Processors this process may use, 1 when the system cannot tell. On Linux the standard
+/// library counts the affinity mask and the cgroup quota, as the server needs on its VPS.
+fn processors() -> usize {
+	thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+}
+
 /// Buffer that holds one string at a time while the cache is decoded: far longer than
 /// any prefix or sentence. A longer string makes the cache unreadable, hence rebuilt.
 const CACHE_SCRATCH_BYTES: usize = 64 * 1024;
@@ -114,7 +120,7 @@ impl ModelStats {
 	/// 24.8 MB), and 2.25 to 2.4 times on ten, where the partial models built in parallel are
 	/// merged into the final one.
 	pub fn estimated_build_bytes(&self, text_bytes: u64) -> u64 {
-		let model = if num_cpus::get() == 1 {
+		let model = if processors() == 1 {
 			self.learning_bytes() * 3 / 2
 		} else {
 			self.learning_bytes() * 5 / 2
@@ -271,7 +277,7 @@ impl MultiGramModel {
 		let lines: Vec<&str> = text.lines().collect();
 		progress.total.store(lines.len(), Ordering::Relaxed);
 		// More partial models than processors would only repeat the prefixes they share
-		let threads = num_cpus::get().clamp(1, lines.len().max(1));
+		let threads = processors().clamp(1, lines.len().max(1));
 
 		let mut final_model = if threads == 1 {
 			Self::learn(&lines, progress)
@@ -559,6 +565,15 @@ impl MultiGramModel {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn the_processors_are_the_ones_the_system_gives() {
+		// They set the number of learning threads and the memory estimate of a build
+		assert!(processors() >= 1);
+		if let Ok(count) = thread::available_parallelism() {
+			assert_eq!(processors(), count.get());
+		}
+	}
 	use std::path::PathBuf;
 
 	// Expected states of the word "ab", once wrapped as "<ab>"

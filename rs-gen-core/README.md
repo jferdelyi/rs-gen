@@ -20,7 +20,8 @@ Library holding all the generation logic: learning character-level n-gram models
 
 - `serde` and `postcard`: serialization of the binary cache.
 - `rand`: random draws (models, n, next character, seeds).
-- `num_cpus`: number of processors, hence of partial models learned in parallel.
+
+The number of partial models learned in parallel is the number of processors the process may use, read by the standard library (`std::thread::available_parallelism`).
 
 ## Memory
 

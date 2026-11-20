@@ -8,7 +8,6 @@ license.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }     # Serialization of the models
 rand = "0.9.5"                                             # Random choice of the next letter and of the seed
 postcard = { version = "1.1.3", features = ["use-std"] }   # Binary format of the model files
-num_cpus = "1.17.0"                                        # Number of threads that learn a model
 
 [lints]
 workspace = true
