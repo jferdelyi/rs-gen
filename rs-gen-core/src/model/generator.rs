@@ -227,7 +227,7 @@ impl Generator {
 	/// - `Err(String)` if no models or seeds are available
 	///
 	/// # Notes
-	/// - Handles `StartSeed::False`, `StartSeed::Random`, `StartSeed::Custom`.
+	/// - Handles `StartSeed::None`, `StartSeed::Random`, `StartSeed::Custom`.
 	/// - Iterates over characters safely (UTF-8 aware).
 	/// - Loops until no next character is returned.
 	fn internal_predict(&self, models: &[(&MultiGramModel, f64)], prediction_input: &PredictionInput) -> Result<String, String> {
@@ -246,7 +246,7 @@ impl Generator {
 		};
 
 		match &prediction_input.start_seed {
-			StartSeed::False => (),
+			StartSeed::None => (),
 			StartSeed::Random(random) => {
 				let n = if *random == 0 {
 					rand::rng().random_range(2..=model.size() + 1)

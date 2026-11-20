@@ -79,7 +79,7 @@ impl GenerateParams {
 	/// Computes the starting seed strategy for sequence generation
 	///
 	/// # Returns
-	/// - `StartSeed::False` if no seed is specified or "none"
+	/// - `StartSeed::None` if no seed is specified or "none"
 	/// - `StartSeed::Custom(s)` if "custom:<s>" is provided
 	/// - `StartSeed::Random(n)` if "random:<n>" is provided
 	///
@@ -87,12 +87,12 @@ impl GenerateParams {
 	/// Returns a `String` describing invalid formats or values
 	fn start_seed(&self) -> Result<StartSeed, String> {
 		let seed : String = match &self.seed  {
-			None => return Ok(StartSeed::False),
+			None => return Ok(StartSeed::None),
 			Some(s) => s.to_lowercase()
 		};
 
 		match seed {
-			s if s == "none" => Ok(StartSeed::False),
+			s if s == "none" => Ok(StartSeed::None),
 			s if s.starts_with("custom:") => {
 				let value = &s["custom:".len()..];
 				if value.is_empty() {

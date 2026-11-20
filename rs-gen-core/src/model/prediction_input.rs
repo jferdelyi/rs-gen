@@ -8,13 +8,12 @@ use std::collections::HashMap;
 /// - `Random(usize)`: select a random starting prefix, using up to the given
 ///   n-gram size as a bound.
 /// - `Custom(String)`: use the provided string as the initial prefix.
-/// - `False`: do not use any explicit seed; generation starts without
-///   a predefined prefix.
+/// - `None`: no seed; generation starts without a predefined prefix.
 #[derive(PartialEq)]
 pub enum StartSeed {
 	Random(usize),
 	Custom(String),
-	False,
+	None,
 }
 
 /// Input parameters for generating predictions from multiple models.
@@ -67,7 +66,7 @@ impl PredictionInput {
 			nb_try: 0,
 			randomness: 0.0,
 			reduce_random: false,
-			start_seed: StartSeed::False,
+			start_seed: StartSeed::None,
 			models_intensity,
 			models_probability: HashMap::new(),
 		};
