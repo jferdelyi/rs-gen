@@ -11,6 +11,7 @@ Static web pages to play with the generator and to manage its models. No build s
 |---|---|
 | `index.html` | The generator page: model weights, parameters, generated words. |
 | `script.js` | Calls `GET /v1/models` and `GET /v1/generate`, and keeps the settings in the browser. |
+| `tooltip.js` | The tooltips of both pages, drawn from the `title` of each control: after a short hover, at once on a keyboard focus, and when a field to type in takes the focus. |
 | `theme.css` | Every color of both pages, as tokens (`--surface`, `--focus`...), loaded before `style.css`. |
 | `style.css` | The style of both pages, with the colors of `theme.css` only. |
 | `admin.html` | The admin page. |
@@ -27,6 +28,7 @@ Both pages aim at WCAG 2.2 AA:
 - **Keyboard**: the focus is drawn on every control with the `--focus` color (2.4.7). The settings, display name and delete dialogs are native `<dialog>` elements opened with `showModal()`: the page behind stops answering, Escape closes them, and the focus goes back to the button that opened them. The settings dialog opens on its title, which draws no ring: Safari would draw one on the first slider, even after a mouse click. Tab leads to the slider.
 - **Messages**: each message of the admin page is a live region (`role="status"` or `role="alert"`) that stays in the accessibility tree while empty, so that its next text is announced (4.1.3). The generator writes a word letter by letter; the whole word is announced apart.
 - **Labels**: every field has a visible label, the weights of the models included (3.3.2).
+- **Tooltips**: every control has one, drawn by `tooltip.js` instead of the browser, which shows a `title` neither to the keyboard nor on a phone. Escape hides it without moving the focus, the pointer can move onto it, and it stays until the pointer or the focus leaves (1.4.13). Screen readers read its text as the description of the control.
 - **Narrow screens**: nothing goes out of a 320 px wide screen (1.4.10).
 
 [`rs-gen-server/tests/web_front.rs`](../rs-gen-server/tests/web_front.rs) checks these rules on the files: `cargo test -p rs-gen-server --test web_front`. The behavior of the dialogs and the layout at 320 px were checked by hand in a Chromium browser. In WebKit, the engine of Safari, were measured: the buttons of the admin header from 320 to 1280 px, and the element the settings dialog opens on; the rest is not tested in Safari.

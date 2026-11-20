@@ -49,4 +49,8 @@
   --warning-surface: #fff8e6;
   --success-text: #067647;
   --success-surface: #ecfdf3;
+
+  /* Tooltips */
+  --tooltip: #1f2328;
+  --on-tooltip: #ffffff;
 }

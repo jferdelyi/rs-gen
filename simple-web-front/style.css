@@ -334,6 +334,21 @@ input[type="checkbox"] {
   outline: none;
 }
 
+/* The tooltips drawn by tooltip.js, over the page and over the dialogs */
+.tooltip {
+  position: fixed;
+  z-index: 1000;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--tooltip);
+  color: var(--on-tooltip);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 4px 12px var(--shadow);
+  overflow-wrap: break-word;
+}
+
 .hidden-slider {
   display: none;
 }

@@ -31,8 +31,9 @@
         <input type="text" name="username" autocomplete="username" value="admin" class="visually-hidden" tabindex="-1" aria-hidden="true">
         <label for="password" class="label-title">Admin password</label>
         <div class="admin-row">
-          <input type="password" id="password" name="password" autocomplete="current-password" required>
-          <button type="submit" id="login-btn" class="primary-btn fixed-btn">Log in</button>
+          <input type="password" id="password" name="password" autocomplete="current-password" required
+                 title="The password of the admin page">
+          <button type="submit" id="login-btn" class="primary-btn fixed-btn" title="Open an admin session, valid for 12 hours">Log in</button>
         </div>
       </form>
       <p id="login-error" class="message message-error visually-hidden" role="alert"></p>
@@ -72,7 +73,8 @@
         <p class="hint" id="add-hint"></p>
         <div class="admin-form">
           <label for="model-file" class="label-title">Text file</label>
-          <input type="file" id="model-file" accept=".dat,.txt,text/plain">
+          <input type="file" id="model-file" accept=".dat,.txt,text/plain"
+                 title="The text file to learn the model from: one word or name per line, .dat or .txt">
 
           <label for="model-name" class="label-title">Model name</label>
           <input type="text" id="model-name" maxlength="64" autocomplete="off" spellcheck="false"
@@ -80,14 +82,15 @@
 
           <label for="model-label" class="label-title">Display name</label>
           <input type="text" id="model-label" maxlength="64" autocomplete="off"
-                 placeholder="Optional: the name shown to the visitors">
+                 placeholder="Optional: the name shown to the visitors"
+                 title="Optional: the name shown to the visitors instead of the model name">
         </div>
-        <label id="force-row" class="force-row hidden">
+        <label id="force-row" class="force-row hidden" title="The model only fits in memory by using swap: tick to add it anyway">
           <input type="checkbox" id="force-add">
           Add it anyway: the server will use swap and the generation will be slower
         </label>
         <div class="button-row">
-          <button id="check-btn" class="action-btn fixed-btn" disabled>Check the file</button>
+          <button id="check-btn" class="action-btn fixed-btn" disabled title="Check the file and the name, without adding anything">Check the file</button>
           <button id="add-btn" class="primary-btn fixed-btn" disabled
                   title="Available once the check of this file and this name passed">Add the model</button>
         </div>
@@ -101,17 +104,20 @@
           <!-- The same user name as the login: password managers update the saved password -->
           <input type="text" name="username" autocomplete="username" value="admin" class="visually-hidden" tabindex="-1" aria-hidden="true">
           <label for="current-password" class="label-title">Current password</label>
-          <input type="password" id="current-password" autocomplete="current-password" required>
+          <input type="password" id="current-password" autocomplete="current-password" required
+                 title="The password in use">
 
           <label for="new-password" class="label-title">New password</label>
-          <input type="password" id="new-password" autocomplete="new-password" minlength="12" required>
+          <input type="password" id="new-password" autocomplete="new-password" minlength="12" required
+                 title="At least 12 characters">
 
           <label for="new-password-again" class="label-title">New password again</label>
-          <input type="password" id="new-password-again" autocomplete="new-password" minlength="12" required>
+          <input type="password" id="new-password-again" autocomplete="new-password" minlength="12" required
+                 title="The new password once more, to catch a typing mistake">
         </form>
         <p id="password-message" class="message visually-hidden" role="status"></p>
         <div class="button-row">
-          <button type="submit" form="password-form" id="password-btn" class="primary-btn fixed-btn">Change password</button>
+          <button type="submit" form="password-form" id="password-btn" class="primary-btn fixed-btn" title="Change the password and close the other admin sessions">Change password</button>
         </div>
       </div>
 
@@ -127,11 +133,12 @@
         Leave it empty to show the technical name.
       </p>
       <label for="label-input" class="label-title">Display name</label>
-      <input type="text" id="label-input" maxlength="64" autocomplete="off">
+      <input type="text" id="label-input" maxlength="64" autocomplete="off"
+             title="The name shown to the visitors; empty, the technical name is shown">
       <p id="label-error" class="message message-error visually-hidden" role="alert"></p>
       <div class="button-row">
-        <button id="label-btn" class="primary-btn fixed-btn">Save</button>
-        <button id="cancel-label-btn" class="action-btn fixed-btn">Cancel</button>
+        <button id="label-btn" class="primary-btn fixed-btn" title="Save the display name">Save</button>
+        <button id="cancel-label-btn" class="action-btn fixed-btn" title="Close without saving">Cancel</button>
       </div>
     </div>
   </dialog>
@@ -145,15 +152,17 @@
         to keep the model without using memory, hide it instead.
       </p>
       <label for="delete-confirm" class="label-title">Type the model name to confirm</label>
-      <input type="text" id="delete-confirm" autocomplete="off" spellcheck="false">
+      <input type="text" id="delete-confirm" autocomplete="off" spellcheck="false"
+             title="Type the model name exactly: the deletion stays locked until then">
       <p id="delete-error" class="message message-error visually-hidden" role="alert"></p>
       <div class="button-row">
-        <button id="delete-btn" class="danger-btn fixed-btn" disabled>Delete the model</button>
-        <button id="cancel-delete-btn" class="action-btn fixed-btn">Cancel</button>
+        <button id="delete-btn" class="danger-btn fixed-btn" disabled title="Delete the text file and the model file for good">Delete the model</button>
+        <button id="cancel-delete-btn" class="action-btn fixed-btn" title="Close without deleting">Cancel</button>
       </div>
     </div>
   </dialog>
 
+  <script src="tooltip.js"></script>
   <script src="admin.js"></script>
 </body>
 

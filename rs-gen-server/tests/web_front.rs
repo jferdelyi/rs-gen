@@ -203,6 +203,7 @@ const CONTRASTS: &[(&str, &str, f64)] = &[
 	("--error-text", "--error-surface", 4.5),
 	("--warning-text", "--warning-surface", 4.5),
 	("--success-text", "--success-surface", 4.5),
+	("--on-tooltip", "--tooltip", 4.5),
 	("--field-border", "--surface", 3.0),
 	("--field-border", "--page", 3.0),
 	("--focus", "--surface", 3.0),
@@ -348,6 +349,59 @@ fn every_field_has_a_visible_label() {
 	}
 	// The weights of the models are created by script.js, each with its label
 	assert!(front("script.js").contains("label.htmlFor = slider.id"), "script.js does not tie each weight to its label");
+}
+
+#[test]
+fn every_control_has_a_tooltip() {
+	// A tooltip says what a control does: its own title, or the one of the <label> around it
+	for page in PAGES {
+		let tags = tags(&front(page));
+		let mut labels: Vec<bool> = Vec::new();
+		let mut missing = Vec::new();
+		for tag in &tags {
+			match tag.name.as_str() {
+				"label" => labels.push(tag.get("title").is_some_and(|t| !t.trim().is_empty())),
+				"/label" => {
+					labels.pop();
+				}
+				"button" | "a" | "input" | "select" | "textarea" => {
+					if tag.get("type") == Some("hidden") || tag.has_class("visually-hidden") {
+						continue;
+					}
+					let own = tag.get("title").is_some_and(|t| !t.trim().is_empty());
+					if !own && !labels.iter().any(|titled| *titled) {
+						let name = tag.get("id").or(tag.get("href")).unwrap_or("?");
+						missing.push(format!("<{} {}>", tag.name, name));
+					}
+				}
+				_ => {}
+			}
+		}
+		assert!(missing.is_empty(), "{page}: controls without a tooltip: {}", missing.join(", "));
+	}
+	// The controls created by the scripts: the weights of the models and the buttons of a model
+	assert!(front("script.js").contains("slider.title = "), "script.js gives the weights no tooltip");
+	assert!(front("admin.js").contains("button.title = title"), "admin.js gives the buttons of a model no tooltip");
+}
+
+#[test]
+fn the_pages_draw_their_tooltips() {
+	// The browser draws a title only after a long hover, never for the keyboard nor on a phone:
+	// tooltip.js draws them instead, on hover and on focus (WCAG 1.4.13)
+	for (page, own) in [("index.html", "script.js"), ("admin.html", "admin.js")] {
+		let scripts: Vec<String> = tags(&front(page)).iter().filter(|t| t.name == "script").filter_map(|t| t.get("src").map(str::to_string)).collect();
+		assert_eq!(scripts, ["tooltip.js", own], "{page} does not load tooltip.js before {own}");
+	}
+	let tooltip = front("tooltip.js");
+	for (code, what) in [
+		("removeAttribute(\"title\")", "the browser draws its own tooltip as well"),
+		("aria-describedby", "the screen readers lose the text of the tooltip"),
+		("\"Escape\"", "Escape does not hide the tooltip"),
+		("\"focusin\"", "the keyboard focus shows no tooltip"),
+		("MutationObserver", "the controls added by the scripts get no tooltip"),
+	] {
+		assert!(tooltip.contains(code), "tooltip.js: {what}");
+	}
 }
 
 #[test]
