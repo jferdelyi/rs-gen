@@ -189,15 +189,15 @@ pub(crate) fn check_upload(name: &str, name_taken: bool, bytes: &[u8], room: Roo
 	if count.max_line_chars > MAX_LINE_CHARS {
 		report.problems.push(format!("A line has {} characters, at most {}", count.max_line_chars, MAX_LINE_CHARS));
 	}
+	match count.marker_lines {
+		0 => (),
+		1 => report.problems.push("1 line holds U+0002 or U+0003, which mark the start and the end of a word".to_owned()),
+		lines => report.problems.push(format!("{lines} lines hold U+0002 or U+0003, which mark the start and the end of a word")),
+	}
 	match count.empty_lines {
 		0 => (),
 		1 => report.warnings.push("1 empty line: it is learned as an empty word".to_owned()),
 		lines => report.warnings.push(format!("{lines} empty lines: each one is learned as an empty word")),
-	}
-	match text.lines().filter(|line| line.contains(['<', '>'])).count() {
-		0 => (),
-		1 => report.warnings.push("1 line contains '<' or '>', which mark the start and the end of a word".to_owned()),
-		lines => report.warnings.push(format!("{lines} lines contain '<' or '>', which mark the start and the end of a word")),
 	}
 
 	if count.complete {
@@ -298,18 +298,23 @@ mod tests {
 	}
 
 	#[test]
-	fn empty_lines_and_markers_are_warnings() {
+	fn empty_lines_are_warnings_and_angle_brackets_are_letters() {
 		let report = check_upload("code", false, b"fn main\n\nVec<u8>\n", ram(Some(GIGABYTE)));
 		assert!(report.ok, "{:?}", report.problems);
-		assert_eq!(report.warnings, vec![
-			"1 empty line: it is learned as an empty word",
-			"1 line contains '<' or '>', which mark the start and the end of a word",
-		]);
+		assert_eq!(report.warnings, vec!["1 empty line: it is learned as an empty word"]);
 		let report = check_upload("code", false, b"a\n\n\n<b>\n<c\n", ram(Some(GIGABYTE)));
-		assert_eq!(report.warnings, vec![
-			"2 empty lines: each one is learned as an empty word",
-			"2 lines contain '<' or '>', which mark the start and the end of a word",
-		]);
+		assert!(report.ok, "{:?}", report.problems);
+		assert_eq!(report.warnings, vec!["2 empty lines: each one is learned as an empty word"]);
+	}
+
+	#[test]
+	fn a_file_with_a_marker_is_refused() {
+		// U+0002 and U+0003 mark the start and the end of a word: a line holding one is not learned
+		let report = check_upload("code", false, "ab\na\u{2}b\n".as_bytes(), ram(Some(GIGABYTE)));
+		assert!(!report.ok);
+		assert_eq!(report.problems, vec!["1 line holds U+0002 or U+0003, which mark the start and the end of a word"]);
+		let report = check_upload("code", false, "ab\na\u{2}b\nc\u{3}\n".as_bytes(), ram(Some(GIGABYTE)));
+		assert_eq!(report.problems, vec!["2 lines hold U+0002 or U+0003, which mark the start and the end of a word"]);
 	}
 
 	#[test]

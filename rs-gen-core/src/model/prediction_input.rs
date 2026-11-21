@@ -7,7 +7,8 @@ use std::collections::HashMap;
 /// # Variants
 /// - `Random(usize)`: select a random starting prefix, using up to the given
 ///   n-gram size as a bound.
-/// - `Custom(String)`: use the provided string as the initial prefix.
+/// - `Custom(String)`: use the provided string as the initial prefix; a prefix holding
+///   `START_CHAR` or `END_CHAR` (U+0002, U+0003) makes the generation fail.
 /// - `None`: no seed; generation starts without a predefined prefix.
 #[derive(PartialEq)]
 pub enum StartSeed {

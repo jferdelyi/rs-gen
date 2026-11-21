@@ -29,7 +29,7 @@ The server reads `./data` relative to its working directory and listens on `127.
 cargo run --release -p rs-gen-server
 ```
 
-A generation that cannot continue (for instance a `custom:` seed with a character that no model knows) answers `500` with the reason in the body; invalid parameters answer `400`, among them a `nb_try` above 1000.
+A generation that cannot continue (for instance a `custom:` seed with a character that no model knows) answers `500` with the reason in the body; invalid parameters answer `400`, among them a `nb_try` above 1000 and a `custom:` seed holding U+0002 or U+0003, the markers of the start and the end of a word.
 
 ## Admin
 
@@ -93,7 +93,7 @@ A model on its way goes through these statuses, one model at a time:
 ### Check of a new model
 
 - Name: 1 to 64 lowercase letters, digits, `_` or `-`, starting with a letter or a digit, and not taken.
-- File: UTF-8, at most 32 MB, at least one word, lines of at most 256 characters (a line of L characters gives about L² / 2 states). Empty lines and lines with `<` or `>` are warnings.
+- File: UTF-8, at most 32 MB, at least one word, lines of at most 256 characters (a line of L characters gives about L² / 2 states). Empty lines are warnings. A line holding U+0002 or U+0003, the markers of the start and the end of a word, is a problem.
 - Memory: the states of the future model are counted without building it, then turned into an estimate of its memory once loaded and while it is built, always keeping 64 MB free. Three cases:
   - it fits in RAM: the model passes;
   - it fits only by using swap: a risk (`risks` in the report), refused unless forced with `force=true`; the generation is then slower;

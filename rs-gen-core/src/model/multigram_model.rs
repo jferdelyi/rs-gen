@@ -10,13 +10,19 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
-pub(crate) const START_CHAR: char = '<';
-pub(crate) const END_CHAR: char = '>';
+/// Marks the start of every word learned: U+0002, "start of text". A control character no
+/// word list holds, so that every printable character, '<' and '>' included, is a letter.
+pub const START_CHAR: char = '\u{2}';
+
+/// Marks the end of every word learned: U+0003, "end of text". A line holding one of the two
+/// markers is not learned: the marker would start or end the word there.
+pub const END_CHAR: char = '\u{3}';
 
 /// Header written at the start of the binary cache.
 /// Bump its version whenever the serialized layout changes: a cache with another
 /// header is rebuilt from the text file instead of being misread.
-const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-4\n";
+/// Version 5: the markers became U+0002 and U+0003, they were '<' and '>'.
+const CACHE_HEADER: &[u8] = b"RSGEN-CACHE-5\n";
 
 /// Processors this process may use, 1 when the system cannot tell. On Linux the standard
 /// library counts the affinity mask and the cgroup quota, as the server needs on its VPS.
@@ -141,6 +147,9 @@ pub struct TextCount {
 
 	/// Length of the longest line, in characters.
 	pub max_line_chars: usize,
+
+	/// Number of lines holding `START_CHAR` or `END_CHAR`: they are not learned.
+	pub marker_lines: usize,
 
 	/// Size of the model that the text would build, partial when `complete` is false.
 	pub stats: ModelStats,
@@ -398,6 +407,11 @@ impl MultiGramModel {
 				count.empty_lines += 1;
 			}
 			count.max_line_chars = count.max_line_chars.max(line.chars().count());
+			// Not learned, as in `add_sentence`
+			if line.contains([START_CHAR, END_CHAR]) {
+				count.marker_lines += 1;
+				continue;
+			}
 
 			let lowercase = line.to_lowercase();
 			let mut hasher = DefaultHasher::new();
@@ -409,13 +423,9 @@ impl MultiGramModel {
 
 			// Same markers as `add_sentence`
 			chars.clear();
-			if !line.starts_with(START_CHAR) {
-				chars.push(START_CHAR);
-			}
+			chars.push(START_CHAR);
 			chars.extend(line.chars());
-			if !line.ends_with(END_CHAR) {
-				chars.push(END_CHAR);
-			}
+			chars.push(END_CHAR);
 			count.stats.max_n = count.stats.max_n.max(chars.len());
 
 			// A state of order n is a lowercase prefix of n - 1 characters followed by one
@@ -460,22 +470,20 @@ impl MultiGramModel {
 	/// Adds a sentence to the model.
 	///
 	/// # Behavior
-	/// - Prepends `START_CHAR` and appends `END_CHAR` if missing.
+	/// - A sentence holding `START_CHAR` or `END_CHAR` is not learned: the marker would start
+	///   or end the word there.
+	/// - Prepends `START_CHAR` and appends `END_CHAR`.
 	/// - Adds the lowercase sentence to `self.sentences`.
 	/// - Updates all n-gram models, for n = 2 to len(sentence).
 	/// - Creates new `NGramModel`s if needed.
 	pub fn add_sentence(&mut self, sentence: &str) {
-		let mut s = sentence.to_string();
+		if sentence.contains([START_CHAR, END_CHAR]) {
+			return;
+		}
 		// Stored lowercase so that `check_if_exists` is a single lookup
 		self.sentences.insert(sentence.to_lowercase().into_boxed_str());
 
-		if !s.starts_with(START_CHAR) {
-			s.insert(0, START_CHAR);
-		}
-		if !s.ends_with(END_CHAR) {
-			s.push(END_CHAR);
-		}
-
+		let s = format!("{START_CHAR}{sentence}{END_CHAR}");
 		for n in 2..=s.chars().count() {
 			let model = self.ngrams.entry(n).or_insert_with(|| NGramModel::new(n).unwrap());
 			model.add_sentence(&s);
@@ -576,15 +584,15 @@ mod tests {
 	}
 	use std::path::PathBuf;
 
-	// Expected states of the word "ab", once wrapped as "<ab>"
+	// Expected states of the word "ab", once wrapped by START_CHAR and END_CHAR
 	fn states_of_ab() -> Vec<StateDump> {
 		vec![
-			(2, "<".to_owned(), vec![('a', 1)]),
+			(2, START_CHAR.to_string(), vec![('a', 1)]),
 			(2, "a".to_owned(), vec![('b', 1)]),
-			(2, "b".to_owned(), vec![('>', 1)]),
-			(3, "<a".to_owned(), vec![('b', 1)]),
-			(3, "ab".to_owned(), vec![('>', 1)]),
-			(4, "<ab".to_owned(), vec![('>', 1)]),
+			(2, "b".to_owned(), vec![(END_CHAR, 1)]),
+			(3, format!("{START_CHAR}a"), vec![('b', 1)]),
+			(3, "ab".to_owned(), vec![(END_CHAR, 1)]),
+			(4, format!("{START_CHAR}ab"), vec![(END_CHAR, 1)]),
 		]
 	}
 
@@ -605,10 +613,34 @@ mod tests {
 	}
 
 	#[test]
-	fn add_sentence_keeps_existing_markers() {
+	fn add_sentence_learns_angle_brackets_as_letters() {
+		// '<' and '>' were the markers: a word that held them lost them or was cut
 		let mut model = MultiGramModel::default();
 		model.add_sentence("<ab>");
-		assert_eq!(model.dump(), states_of_ab());
+		assert_eq!(model.predict(&START_CHAR.to_string(), 2), Ok(Some('<')));
+		assert_eq!(model.predict(&format!("{START_CHAR}<ab"), 5), Ok(Some('>')));
+		assert_eq!(model.predict(&format!("{START_CHAR}<ab>"), 6), Ok(Some(END_CHAR)));
+		assert!(model.check_if_exists("<ab>"));
+	}
+
+	#[test]
+	fn a_line_with_a_marker_is_not_learned() {
+		// A marker inside a word would start or end it there
+		for line in [format!("a{START_CHAR}b"), format!("ab{END_CHAR}"), format!("{START_CHAR}ab")] {
+			let mut model = MultiGramModel::default();
+			model.add_sentence(&line);
+			assert_eq!(model.size(), 0, "{line:?}");
+			assert!(!model.check_if_exists(&line), "{line:?}");
+		}
+	}
+
+	#[test]
+	fn count_text_counts_the_lines_with_a_marker() {
+		let text = format!("ab\na{START_CHAR}b\nc{END_CHAR}\n<d>\n");
+		let count = MultiGramModel::count_text(&text, usize::MAX);
+		assert_eq!(count.marker_lines, 2);
+		assert_eq!(count.lines, 4);
+		assert_eq!(count.stats, model_of(&text).stats());
 	}
 
 	#[test]
@@ -633,8 +665,8 @@ mod tests {
 	fn predict_uses_the_requested_order() {
 		let mut model = MultiGramModel::default();
 		model.add_sentence("abc");
-		assert_eq!(model.predict("<ab", 3), Ok(Some('c')));
-		assert_eq!(model.predict("<ab", 4), Ok(Some('c')));
+		assert_eq!(model.predict(&format!("{START_CHAR}ab"), 3), Ok(Some('c')));
+		assert_eq!(model.predict(&format!("{START_CHAR}ab"), 4), Ok(Some('c')));
 		assert_eq!(model.predict("b", 3), Ok(None));
 	}
 
@@ -642,9 +674,9 @@ mod tests {
 	fn predict_without_a_model_of_that_order_returns_none() {
 		let mut model = MultiGramModel::default();
 		model.add_sentence("abc");
-		assert_eq!(model.predict("<ab", 0), Ok(None));
-		assert_eq!(model.predict("<ab", 1), Ok(None));
-		assert_eq!(model.predict("<ab", 9), Ok(None));
+		assert_eq!(model.predict(&format!("{START_CHAR}ab"), 0), Ok(None));
+		assert_eq!(model.predict(&format!("{START_CHAR}ab"), 1), Ok(None));
+		assert_eq!(model.predict(&format!("{START_CHAR}ab"), 9), Ok(None));
 	}
 
 	#[test]
@@ -666,9 +698,9 @@ mod tests {
 		assert!(model.check_if_exists("cd"));
 		let start: Vec<StateDump> = model.dump()
 			.into_iter()
-			.filter(|(n, prefix, _)| *n == 2 && prefix == "<")
+			.filter(|(n, prefix, _)| *n == 2 && *prefix == START_CHAR.to_string())
 			.collect();
-		assert_eq!(start, vec![(2, "<".to_owned(), vec![('a', 2), ('c', 1)])]);
+		assert_eq!(start, vec![(2, START_CHAR.to_string(), vec![('a', 2), ('c', 1)])]);
 	}
 
 	#[test]
@@ -698,7 +730,7 @@ mod tests {
 
 		assert_eq!(loaded.dump(), built.dump());
 		assert!(loaded.check_if_exists("saint-étienne"));
-		assert_eq!(loaded.predict("<èz", 4), Ok(Some('e')));
+		assert_eq!(loaded.predict(&format!("{START_CHAR}èz"), 4), Ok(Some('e')));
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 
@@ -709,7 +741,7 @@ mod tests {
 		std::fs::write(&dat, "").unwrap();
 		let model = MultiGramModel::new(&dat).unwrap();
 		assert_eq!(model.size(), 0);
-		assert_eq!(model.predict("<a", 2), Ok(None));
+		assert_eq!(model.predict(&format!("{START_CHAR}a"), 2), Ok(None));
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 
@@ -820,7 +852,8 @@ mod tests {
 	#[test]
 	fn stats_counts_the_sentences_and_the_states() {
 		let model = model_of("ab\n");
-		// States "<", "a", "b", "<a", "ab", "<ab": 10 bytes
+		// States of START_CHAR, "a", "b", START_CHAR "a", "ab", START_CHAR "ab": 10 bytes, a marker
+		// being 1 byte
 		assert_eq!(model.stats(), ModelStats { sentences: 1, sentence_bytes: 2, max_n: 4, states: 6, key_bytes: 10 });
 		assert_eq!(model.transition_count(), 6);
 		assert_eq!(MultiGramModel::default().stats(), ModelStats::default());
@@ -851,7 +884,7 @@ mod tests {
 			"",
 			// Pairs that differ only by their last byte
 			"Susanna\nSusannah\nacademics\nacademise\nberakot\nberakoth\n",
-			// "İ" lowercases to two characters: "<İ" and "<i\u{307}" give the same prefix
+			// "İ" lowercases to two characters: START_CHAR "İ" and START_CHAR "i\u{307}" give the same prefix
 			// for two different orders, hence two states
 			"İ\ni\u{307}\n",
 		];
@@ -864,7 +897,7 @@ mod tests {
 
 	#[test]
 	fn count_text_stops_at_the_state_limit() {
-		// "<abcdef>" has 28 states
+		// "abcdef", once wrapped by the markers, has 28 states
 		assert_eq!(MultiGramModel::count_text("abcdef", usize::MAX).stats.states, 28);
 		let count = MultiGramModel::count_text("abcdef", 10);
 		assert!(!count.complete);

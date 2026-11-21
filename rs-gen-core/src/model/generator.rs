@@ -1,5 +1,5 @@
 use crate::io;
-use crate::model::multigram_model::{MultiGramModel, START_CHAR};
+use crate::model::multigram_model::{MultiGramModel, END_CHAR, START_CHAR};
 use crate::model::prediction_input::{PredictionInput, StartSeed};
 use rand::Rng;
 use std::cmp::{max, min};
@@ -262,8 +262,11 @@ impl Generator {
 				global_prefix = word.clone();
 			}
 			StartSeed::Custom(s) => {
+				// A marker would start or end the word inside the seed
+				if s.contains([START_CHAR, END_CHAR]) {
+					return Err("The seed holds U+0002 or U+0003, which mark the start and the end of a word".to_owned());
+				}
 				word = (*s).to_owned();
-				if word.starts_with(START_CHAR) { word.remove(0); }
 				global_prefix = word.clone();
 			}
 		}
@@ -277,7 +280,7 @@ impl Generator {
 			match model.predict(&global_prefix, n)? {
 				Some(c) => {
 					global_prefix.push(c);
-					if c != '>' {
+					if c != END_CHAR {
 						word.push(c);
 					} else {
 						break;
@@ -515,8 +518,41 @@ mod tests {
 	}
 
 	#[test]
+	fn a_generation_does_not_stop_on_an_angle_bracket() {
+		// Every state of "a>b" has a single transition: the model can only give its line
+		let (generator, dir) = generator_with("angle-bracket", &[("low", "a>b\n")]);
+		let input = generator.make_prediction_input();
+		for word in predict_within_deadline(generator, input, 3) {
+			assert_eq!(word, Ok("a>b".to_owned()));
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_custom_seed_keeps_its_angle_bracket() {
+		let (generator, dir) = generator_with("seed-angle-bracket", &[("low", "<ab\n")]);
+		let mut input = generator.make_prediction_input();
+		input.start_seed = StartSeed::Custom("<a".to_owned());
+		for word in predict_within_deadline(generator, input, 3) {
+			assert_eq!(word, Ok("<ab".to_owned()));
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_custom_seed_with_a_marker_is_refused() {
+		let (generator, dir) = generator_with("seed-marker", &[("low", "abc\n")]);
+		for seed in [format!("{START_CHAR}a"), format!("a{END_CHAR}b")] {
+			let mut input = generator.make_prediction_input();
+			input.start_seed = StartSeed::Custom(seed.clone());
+			assert!(generator.predict(&input).is_err(), "{seed:?}");
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
 	fn reduce_random_without_randomness_still_reduces() {
-		// "<ba" exists in no model: the reduction must reach "a" even with a zero randomness
+		// START_CHAR "ba" exists in no model: the reduction must reach "a" even with a zero randomness
 		let (generator, dir) = generator_with("reduce-random", &[("low", "abc\n")]);
 		let mut input = generator.make_prediction_input();
 		input.start_seed = StartSeed::Custom("ba".to_owned());

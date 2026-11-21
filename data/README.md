@@ -6,6 +6,7 @@ Training files of the generator. Each `<name>.dat` file becomes a model called `
 
 - UTF-8 text, one entry (word, name, title) per line; `\n` and `\r\n` line endings are both accepted.
 - Case is ignored: entries are learned in lowercase, and a generated word is compared to the entries without case.
+- Each entry is learned between two markers, U+0002 (start of text) and U+0003 (end of text): every other character, `<` and `>` included, is a letter. A line holding one of the two markers is not learned, and the admin page refuses a file that has one.
 - An empty file gives an empty model.
 
 ## Models

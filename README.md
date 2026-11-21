@@ -101,7 +101,7 @@ To prevent generating words already present in the training database, the genera
 
 Generation can be initialized using a seed:
 
-* `custom:<string>`: start from an explicit prefix
+* `custom:<string>`: start from an explicit prefix; it cannot hold U+0002 or U+0003, the markers of the start and the end of a word
 * `random:<n>`: start from a random key of the N-gram model of order `n`
   * `n = 0` picks the order randomly
 

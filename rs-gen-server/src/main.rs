@@ -14,6 +14,7 @@ use auth::Auth;
 use catalog::Catalog;
 use system::MemoryInfo;
 use rs_gen_core::model::generator::Generator;
+use rs_gen_core::model::multigram_model::{END_CHAR, START_CHAR};
 use rs_gen_core::model::prediction_input::StartSeed;
 use serde::Deserialize;
 
@@ -97,6 +98,9 @@ impl GenerateParams {
 				let value = &s["custom:".len()..];
 				if value.is_empty() {
 					return Err("Custom seed cannot be empty".into());
+				}
+				if value.contains([START_CHAR, END_CHAR]) {
+					return Err("Custom seed cannot hold U+0002 or U+0003, which mark the start and the end of a word".into());
 				}
 				match value.parse::<String>() {
 					Err(_) => Err("Custom seed must be a valid UTF-8 string".into()),
@@ -281,6 +285,34 @@ mod tests {
 		assert_eq!(params(None).nb_try(), Ok(5));
 		assert_eq!(params(Some(MAX_NB_TRY)).nb_try(), Ok(MAX_NB_TRY));
 		assert!(params(Some(MAX_NB_TRY + 1)).nb_try().is_err());
+	}
+
+	#[test]
+	fn a_seed_with_a_marker_is_refused() {
+		// U+0002 and U+0003 mark the start and the end of a word
+		for seed in ["custom:\u{2}ab", "custom:a\u{3}b"] {
+			let query = GenerateParams { seed: Some(seed.to_owned()), ..params(None) };
+			assert!(query.start_seed().is_err(), "{seed:?}");
+		}
+		// '<' and '>' are letters: kept as they are
+		let query = GenerateParams { seed: Some("custom:<a>".to_owned()), ..params(None) };
+		assert!(matches!(query.start_seed(), Ok(StartSeed::Custom(seed)) if seed == "<a>"));
+	}
+
+	#[actix_web::test]
+	async fn a_seed_with_a_marker_is_a_bad_request() {
+		let dir = std::env::temp_dir().join(format!("rs-gen-server-{}-seed-marker", std::process::id()));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		std::fs::write(dir.join("low.dat"), "abc\n").unwrap();
+		let state = web::Data::new(AppState::new(&dir, None).unwrap());
+		let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+		let response = test::call_service(&app, TestRequest::get().uri("/v1/generate?seed=custom:%02ab&intensity=low:1").to_request()).await;
+		assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+		let response = test::call_service(&app, TestRequest::get().uri("/v1/generate?seed=custom:ab&intensity=low:1").to_request()).await;
+		assert_eq!(response.status(), StatusCode::OK);
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 
 	#[actix_web::test]
