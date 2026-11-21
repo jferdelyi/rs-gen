@@ -5,6 +5,8 @@ const SETTINGS_KEY = "markov_word_generator_v2.0";
 
 let isInitializing = true;
 let currentUrl = null;
+// Display names of the models, by name, from GET /v1/labels
+let modelLabels = {};
 
 /* =============================
    DOM References
@@ -32,6 +34,8 @@ const weights = document.getElementById("weights");
 const weightsDialogTitle = document.getElementById("weights-dialog-title");
 const weightsPanel = document.getElementById("weights-panel");
 const equalWeightsBtn = document.getElementById("equal-weights");
+const wordPanelBody = document.getElementById("word-panel-body");
+const wordBubble = document.getElementById("word-bubble");
 
 /* =============================
    Default Settings
@@ -169,6 +173,7 @@ async function loadModels() {
 
         const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || defaultSettings;
         const labels = await loadLabels();
+        modelLabels = labels;
 
         modelContainer.innerHTML = "";
 
@@ -244,6 +249,8 @@ function equalWeights() {
    Terminal
 ============================= */
 function initTerminal() {
+    // The bubble may sit in a line of the terminal: it is kept
+    document.body.appendChild(wordBubble);
     terminal.innerHTML = "";
 
     const loginLine = document.createElement("div");
@@ -277,6 +284,7 @@ function initTerminal() {
 
     promptLine.append(user, path, command);
     terminal.append(loginLine, promptLine);
+    forgetWords();
 }
 
 // Announces a whole text to screen readers; emptied first, so that the same word twice is
@@ -301,6 +309,357 @@ function typeWriter(text) {
     }, 15);
 }
 
+// Writes a word letter by letter, as typeWriter, in an element that keeps its trace
+function typeWord(trace) {
+    announce(trace.word);
+    const line = document.createElement("div");
+    const word = element("span", "word");
+    line.appendChild(word);
+    terminal.appendChild(line);
+
+    const letters = [...trace.word];
+    const typed = () => {
+        watchWord(word, trace);
+        // On a very wide screen, the panel shows the last word
+        if (veryWideScreen.matches) {
+            showWord(word);
+        }
+    };
+    if (letters.length === 0) {
+        typed();
+        return;
+    }
+    let i = 0;
+    const interval = setInterval(() => {
+        word.textContent += letters[i++];
+        terminal.scrollTop = terminal.scrollHeight;
+        if (i >= letters.length) {
+            clearInterval(interval);
+            typed();
+        }
+    }, 15);
+}
+
+/* =============================
+   How a word was made: the trace of GET /v1/generate?trace=true, drawn in the Last Word
+   panel on a very wide screen, in a bubble under the word otherwise
+============================= */
+// Same width as the very wide screen block of style.css
+const veryWideScreen = window.matchMedia("(min-width: 1320px)");
+
+// The model with the largest share of a word takes the first color, up to the eighth
+const MODEL_COLORS = 8;
+// Circumference of the circles of the pie, of radius 8
+const PIE = 2 * Math.PI * 8;
+const SVG = "http://www.w3.org/2000/svg";
+// A word hovered with the mouse shows its bubble after this delay, as the tooltips; leaving
+// it hides the bubble after a grace delay, the time to reach the bubble
+const BUBBLE_SHOW_MS = 400;
+const BUBBLE_HIDE_MS = 300;
+
+// The trace of each word of the terminal
+const wordTraces = new WeakMap();
+// The word drawn in the panel or in the bubble
+let shownWord = null;
+let bubbleTimer = null;
+// A focus given back to a word by Escape does not open its bubble again
+let quietFocus = false;
+
+function element(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+}
+
+function labelOf(model) {
+    return modelLabels[model] || model;
+}
+
+function percent(part, whole) {
+    return `${Math.round(part / whole * 100)}%`;
+}
+
+// The models of a word with their number of letters, the largest share first, and their color
+function modelShares(trace) {
+    const counts = new Map();
+    for (const letter of trace.letters) {
+        counts.set(letter.model, (counts.get(letter.model) || 0) + 1);
+    }
+    return [...counts]
+        .sort((a, b) => b[1] - a[1] || labelOf(a[0]).localeCompare(labelOf(b[0])))
+        .map(([model, count], i) => ({ model, count, color: Math.min(i + 1, MODEL_COLORS) }));
+}
+
+// The settings a word was generated with, told under its trace
+function settingsOf() {
+    const seed = {
+        custom: `"${customSeed.value}"`,
+        random: `random, order ${randomSeed.value}`,
+        "full-random": "random",
+    }[document.querySelector('input[name="seed"]:checked')?.value] || "none";
+    return {
+        randomness: `${Math.round(Number(randomness.value) * 100)}%`,
+        maxN: Number(maxN.value) === 0 ? "none" : maxN.value,
+        seed,
+        reduceRandom: progressiveRandomness.checked,
+    };
+}
+
+// A cell of the trace, with its classes and the tooltip that explains it, if any
+function cell(row, text, className, tip) {
+    const td = row.insertCell();
+    if (className) td.className = className;
+    if (tip) td.title = tip;
+    td.textContent = text;
+    return td;
+}
+
+// What happened while a letter, or the end, was chosen
+function events(step, isEnd) {
+    const found = [];
+    const fallbacks = step.fallbacks.map(labelOf);
+    if (fallbacks.length === 1) {
+        found.push([`${fallbacks[0]} could not go on`, "trace-warning", "This model was drawn first and knew no letter after these ones"]);
+    } else if (fallbacks.length > 1) {
+        found.push([`${fallbacks.length} models could not go on`, "trace-warning", `Drawn first, they knew no letter after these ones: ${fallbacks.join(", ")}`]);
+    }
+    if (step.reductions.length > 0) {
+        found.push([`shortened from order ${step.reductions[0]}`, "trace-danger", "No model knew the longer context: fewer letters were looked at"]);
+    }
+    if (step.random_n) {
+        found.push(["order drawn at random", "trace-warning", "The setting Randomness drew how many letters to look at"]);
+    }
+    if (isEnd) {
+        found.push(["end of the word", "trace-muted", ""]);
+    } else if (step.choices === 1) {
+        found.push(["only letter possible", "trace-muted", "The training files show a single letter after these ones: nothing was drawn"]);
+    } else if (found.length === 0) {
+        found.push([`drawn among ${step.choices} letters`, "trace-muted", ""]);
+    }
+    return found;
+}
+
+// The pie of the shares of the models; the legend says the same in words
+function pieChart(shares, letters) {
+    const svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("class", "trace-pie");
+    svg.setAttribute("viewBox", "0 0 32 32");
+    svg.setAttribute("aria-hidden", "true");
+    const group = document.createElementNS(SVG, "g");
+    group.setAttribute("transform", "rotate(-90 16 16)");
+    let offset = 0;
+    for (const share of shares) {
+        const length = share.count / letters * PIE;
+        const slice = document.createElementNS(SVG, "circle");
+        slice.setAttribute("class", `slice model-${share.color}`);
+        slice.setAttribute("cx", "16");
+        slice.setAttribute("cy", "16");
+        slice.setAttribute("r", "8");
+        slice.setAttribute("stroke-dasharray", `${length} ${PIE}`);
+        slice.setAttribute("stroke-dashoffset", `${-offset}`);
+        group.appendChild(slice);
+        offset += length;
+    }
+    svg.appendChild(group);
+    return svg;
+}
+
+// The columns of the trace, with what each one tells
+const TRACE_COLUMNS = [
+    ["#", "col-index", "Position of the letter in the word"],
+    ["letter", "", "The letter, in the color of the model that gave it"],
+    ["model", "", "The model that gave the letter"],
+    ["order", "", "How many letters were looked at, plus one. ⚄: drawn at random (Randomness). 7→5: shortened, no model knew the longer context"],
+    ["after", "col-context", "The letters looked at to choose this one; ^ is the start of the word"],
+    ["chance", "", "How often this letter came after them in the training files"],
+    ["event", "col-event", "What happened while this letter was chosen"],
+];
+
+// Draws how a word was made in `container`, as a terminal would: the word in the colors of its
+// models, their shares, each letter, the settings, the buttons
+function renderTrace(trace, container) {
+    const shares = modelShares(trace);
+    const colorOf = model => shares.find(share => share.model === model)?.color;
+
+    const word = element("div", "trace-word");
+    const seed = trace.seed ? [...trace.seed.text] : [];
+    for (const letter of seed) {
+        const node = element("span", "trace-seed", letter);
+        node.title = "Given as the seed";
+        word.appendChild(node);
+    }
+    for (const letter of trace.letters) {
+        word.appendChild(element("span", `model-${colorOf(letter.model)}`, letter.letter));
+    }
+    const head = element("div", "trace-head");
+    head.appendChild(word);
+    if (shares.length > 0) {
+        const legend = element("ul", "trace-legend");
+        for (const share of shares) {
+            const item = element("li");
+            item.title = `${share.count} of the ${trace.letters.length} letters`;
+            const swatch = element("span", `swatch model-${share.color}`);
+            swatch.setAttribute("aria-hidden", "true");
+            item.append(swatch, `${labelOf(share.model)} ${percent(share.count, trace.letters.length)}`);
+            legend.appendChild(item);
+        }
+        const key = element("div", "trace-key");
+        key.append(legend, pieChart(shares, trace.letters.length));
+        head.appendChild(key);
+    }
+
+    const table = element("table", "trace-table");
+    table.setAttribute("aria-label", "How each letter was chosen");
+    const header = table.createTHead().insertRow();
+    for (const [title, className, tip] of TRACE_COLUMNS) {
+        const th = element("th", className, title);
+        th.scope = "col";
+        th.title = tip;
+        header.appendChild(th);
+    }
+    const body = table.createTBody();
+    const rows = trace.letters.map((letter, i) => [String(seed.length + i + 1), letter.letter, `model-${colorOf(letter.model)}`, letter, false]);
+    rows.push(["", "⏎", "trace-muted", trace.end, true]);
+    for (const [index, letter, letterClass, step, isEnd] of rows) {
+        const row = body.insertRow();
+        cell(row, index, "col-index trace-muted");
+        cell(row, letter, letterClass, isEnd ? "End of the word" : "");
+        cell(row, labelOf(step.model));
+        // Shortened: the first order tried and the one used; every step is in the tooltip
+        const shortened = step.reductions.length > 0;
+        const orderTip = [
+            shortened ? `Shortened ${[...step.reductions, step.n].join(" → ")}: no model knew the longer context` : "",
+            step.random_n ? "Drawn at random (Randomness)" : "",
+        ].filter(Boolean).join(". ");
+        const order = shortened ? `${step.reductions[0]}→${step.n}` : String(step.n);
+        cell(row, order + (step.random_n ? " ⚄" : ""), shortened ? "trace-danger" : step.random_n ? "trace-warning" : "", orderTip);
+        cell(row, `${step.at_start ? "^" : ""}${step.context}`, "col-context", step.at_start ? "^ is the start of the word" : "");
+        cell(row, percent(step.count, step.total), "",
+            `${step.count} of ${step.total} times, among ${step.choices} ${step.choices === 1 ? "letter" : "letters"}`);
+        // The event, in its column; on a narrow trace, on its own line under the letter
+        const event = cell(row, "", "col-event");
+        const eventLine = body.insertRow();
+        eventLine.className = "event-row";
+        const eventBelow = cell(eventLine, "");
+        eventBelow.colSpan = TRACE_COLUMNS.length;
+        for (const target of [event, eventBelow]) {
+            events(step, isEnd).forEach(([text, className, tip], i) => {
+                if (i > 0) target.append(" · ");
+                const span = element("span", className, text);
+                if (tip) span.title = tip;
+                target.appendChild(span);
+            });
+        }
+    }
+
+    const parts = [head, table];
+    if (trace.rejected.length > 0) {
+        parts.push(element("p", "trace-attempts", `Refused first, already in the training files: ${trace.rejected.join(", ")}`));
+    }
+    if (trace.settings) {
+        const s = trace.settings;
+        const seedFrom = trace.seed?.model ? `, drawn from ${labelOf(trace.seed.model)}` : "";
+        const settings = [`randomness ${s.randomness}`, `max order ${s.maxN}`, `seed ${s.seed}${seedFrom}`];
+        if (s.reduceRandom) settings.push("advanced randomness");
+        parts.push(element("p", "trace-attempts", `Settings: ${settings.join(" · ")}`));
+    }
+
+    const buttons = element("div", "trace-buttons");
+    const copy = element("button", "term-btn", "[ copy ]");
+    copy.title = "Copy the word";
+    copy.addEventListener("click", async () => {
+        try {
+            await navigator.clipboard.writeText(trace.word);
+            copy.textContent = "[ copied ]";
+        } catch {
+            copy.textContent = "[ copy failed ]";
+        }
+        setTimeout(() => {
+            copy.textContent = "[ copy ]";
+        }, 1000);
+    });
+    // The definition of the word by an AI, to come: off, but reachable for its tooltip
+    const man = element("button", "term-btn", "[ man ]");
+    man.title = "AI definition, coming soon";
+    man.setAttribute("aria-disabled", "true");
+    buttons.append(copy, man);
+    parts.push(buttons);
+
+    container.replaceChildren(...parts);
+}
+
+// Draws a word in the panel on a very wide screen, in the bubble under it otherwise
+function showWord(word) {
+    clearTimeout(bubbleTimer);
+    const trace = wordTraces.get(word);
+    if (!trace) return;
+    shownWord = word;
+    if (veryWideScreen.matches) {
+        renderTrace(trace, wordPanelBody);
+        return;
+    }
+    renderTrace(trace, wordBubble);
+    // Right after its word in the page: Tab goes from the word to the buttons of its bubble
+    word.after(wordBubble);
+    wordBubble.classList.remove("hidden");
+    placeBubble(word);
+}
+
+function hideBubble() {
+    clearTimeout(bubbleTimer);
+    wordBubble.classList.add("hidden");
+}
+
+// Under the word, or above it when the screen has no room below; always inside the screen
+function placeBubble(word) {
+    const margin = 8;
+    const box = word.getBoundingClientRect();
+    const width = wordBubble.offsetWidth;
+    const height = wordBubble.offsetHeight;
+    const below = box.bottom + 6;
+    const top = below + height + margin <= window.innerHeight ? below : Math.max(margin, box.top - 6 - height);
+    const left = Math.max(margin, Math.min(box.left, window.innerWidth - width - margin));
+    wordBubble.style.left = `${left}px`;
+    wordBubble.style.top = `${top}px`;
+}
+
+// A word of the terminal shows how it was made: after a delay on a mouse hover, at once on a
+// keyboard focus or a tap
+function watchWord(word, trace) {
+    wordTraces.set(word, trace);
+    word.tabIndex = 0;
+    word.addEventListener("pointerenter", event => {
+        if (event.pointerType !== "mouse") return;
+        clearTimeout(bubbleTimer);
+        if (veryWideScreen.matches) {
+            showWord(word);
+        } else {
+            bubbleTimer = setTimeout(() => showWord(word), BUBBLE_SHOW_MS);
+        }
+    });
+    word.addEventListener("pointerleave", event => {
+        if (event.pointerType !== "mouse" || veryWideScreen.matches) return;
+        clearTimeout(bubbleTimer);
+        bubbleTimer = setTimeout(hideBubble, BUBBLE_HIDE_MS);
+    });
+    word.addEventListener("focusin", () => {
+        if (quietFocus) {
+            quietFocus = false;
+            return;
+        }
+        showWord(word);
+    });
+    word.addEventListener("click", () => showWord(word));
+}
+
+// The terminal is cleared: no word to show
+function forgetWords() {
+    hideBubble();
+    shownWord = null;
+    wordPanelBody.replaceChildren(element("p", "trace-empty", "Generate a word to see how it was made."));
+}
+
 /* =============================
    Generate
 ============================= */
@@ -313,21 +672,33 @@ async function reloadModels() {
     updateUrl();
 }
 
+// Asks a word with its trace; an error comes back as text
+async function requestWord() {
+    const response = await fetch(`${currentUrl}&trace=true`);
+    if (!response.ok) {
+        return { status: response.status, error: await response.text() };
+    }
+    return { trace: await response.json() };
+}
+
 async function generate() {
     if (!currentUrl) return;
 
     generateBtn.disabled = true;
 
     try {
-        let response = await fetch(currentUrl);
-        let result = await response.text();
+        let result = await requestWord();
         // A model was hidden or deleted since the page loaded: retry once with the new list
-        if (response.status === 400 && UNKNOWN_MODEL.test(result.trim())) {
+        if (result.status === 400 && UNKNOWN_MODEL.test(result.error.trim())) {
             await reloadModels();
-            response = await fetch(currentUrl);
-            result = await response.text();
+            result = await requestWord();
         }
-        typeWriter(result);
+        if (result.trace) {
+            result.trace.settings = settingsOf();
+            typeWord(result.trace);
+        } else {
+            typeWriter(result.error);
+        }
     } catch (err) {
         typeWriter(`Error: ${err.message}`);
     }
@@ -372,6 +743,50 @@ resetBtn.addEventListener("click", initTerminal);
 equalWeightsBtn.addEventListener("click", equalWeights);
 
 wideScreen.addEventListener("change", placeWeights);
+
+// Leaving the very wide screen moves the word from the panel to a bubble, and back
+veryWideScreen.addEventListener("change", () => {
+    hideBubble();
+    if (veryWideScreen.matches && shownWord) {
+        showWord(shownWord);
+    }
+});
+
+// The bubble stays while the pointer is on it
+wordBubble.addEventListener("pointerenter", () => clearTimeout(bubbleTimer));
+wordBubble.addEventListener("pointerleave", event => {
+    if (event.pointerType !== "mouse") return;
+    bubbleTimer = setTimeout(hideBubble, BUBBLE_HIDE_MS);
+});
+
+// Escape closes the bubble; a focus inside it goes back to its word
+document.addEventListener("keydown", event => {
+    if (event.key !== "Escape" || wordBubble.classList.contains("hidden")) return;
+    const inside = wordBubble.contains(document.activeElement);
+    hideBubble();
+    if (inside && shownWord) {
+        quietFocus = true;
+        shownWord.focus();
+    }
+});
+
+// A focus or a press away from the word and its bubble closes it
+document.addEventListener("focusin", event => {
+    if (wordBubble.classList.contains("hidden")) return;
+    if (event.target !== shownWord && !wordBubble.contains(event.target)) {
+        hideBubble();
+    }
+});
+document.addEventListener("pointerdown", event => {
+    if (wordBubble.classList.contains("hidden")) return;
+    if (!wordBubble.contains(event.target) && !event.target.closest?.(".word")) {
+        hideBubble();
+    }
+});
+
+// The bubble is placed for the word where it was: a scroll or a resize closes it
+terminal.addEventListener("scroll", hideBubble);
+window.addEventListener("resize", hideBubble);
 
 // The dialog covers the screen around its card: a press on the dialog itself is outside the card
 settingsModal.addEventListener("mousedown", e => {

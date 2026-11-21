@@ -271,6 +271,260 @@ input[type="checkbox"] {
 }
 
 /* =========================
+   How a word was made: a terminal of its own, in the Last Word panel or in a bubble
+========================= */
+/* A word of the terminal: its trace on a hover, a keyboard focus or a tap */
+.word {
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.word:hover {
+  text-decoration: underline dotted;
+}
+
+/* Shown on a very wide screen only, see the end of this file */
+.word-panel {
+  display: none;
+}
+
+.word-panel h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.trace {
+  container: trace / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 12px;
+  background: var(--terminal-raised);
+  color: var(--terminal-text);
+  font-family: "Menlo", "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Under its word, over the page: placed by script.js */
+.word-bubble {
+  position: fixed;
+  z-index: 900;
+  width: min(560px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  box-shadow: 0 8px 24px var(--shadow);
+}
+
+.trace-empty,
+.trace-attempts {
+  margin: 0;
+  color: var(--terminal-muted);
+}
+
+.trace-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.trace-word {
+  font-size: 24px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The letters given as the seed */
+.trace-seed {
+  color: var(--terminal-muted);
+  text-decoration: underline;
+}
+
+.trace-key {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.trace-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  border-radius: 50%;
+}
+
+.trace-pie {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+}
+
+.trace-pie circle {
+  fill: none;
+  stroke-width: 16;
+}
+
+/* Letter by letter: #, ch, model, n, context, p, event */
+.trace-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.trace-table th {
+  padding: 0 8px 4px 0;
+  color: var(--terminal-muted);
+  font-weight: normal;
+  text-align: left;
+}
+
+.trace-table td {
+  padding: 1px 8px 1px 0;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+/* Every column at the width of its content; the event takes the rest */
+.trace-table th,
+.trace-table td {
+  width: 1%;
+}
+
+.trace-table .col-event {
+  width: auto;
+  white-space: normal;
+}
+
+/* The event under its letter: on a narrow trace only */
+.trace-table .event-row {
+  display: none;
+}
+
+.trace-table .event-row td {
+  padding: 0 0 4px 0;
+  white-space: normal;
+}
+
+.trace-table tbody tr:hover td {
+  background: var(--terminal-border);
+}
+
+/* A narrow trace, as in the panel or on a phone: the number and the context give way, and the
+   event goes under its letter */
+@container trace (max-width: 420px) {
+  .col-index,
+  .col-context,
+  .col-event {
+    display: none;
+  }
+
+  .trace-table .event-row {
+    display: table-row;
+  }
+
+  /* Tighter, so that the four columns fit 250 px */
+  .trace-table {
+    font-size: 11px;
+  }
+
+  .trace-table th,
+  .trace-table td {
+    padding-right: 6px;
+  }
+}
+
+.trace-muted {
+  color: var(--terminal-muted);
+}
+
+.trace-warning {
+  color: var(--terminal-warning);
+}
+
+.trace-danger {
+  color: var(--terminal-danger);
+}
+
+.trace-ok {
+  color: var(--terminal-user);
+}
+
+/* The words refused before this one */
+.trace-refused {
+  text-decoration: line-through;
+}
+
+.trace-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+/* A button of the terminal: [ copy ] */
+.term-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--terminal-text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.term-btn:hover {
+  background: var(--terminal-border);
+}
+
+/* Off, but reachable: its tooltip says why */
+.term-btn[aria-disabled="true"],
+.term-btn[aria-disabled="true"]:hover {
+  background: transparent;
+  color: var(--terminal-muted);
+  cursor: not-allowed;
+}
+
+/* The color of each model of a word: its letters, its swatch, its slice */
+.model-1 { color: var(--model-1); }
+.model-2 { color: var(--model-2); }
+.model-3 { color: var(--model-3); }
+.model-4 { color: var(--model-4); }
+.model-5 { color: var(--model-5); }
+.model-6 { color: var(--model-6); }
+.model-7 { color: var(--model-7); }
+.model-8 { color: var(--model-8); }
+
+.swatch.model-1 { background: var(--model-1); }
+.swatch.model-2 { background: var(--model-2); }
+.swatch.model-3 { background: var(--model-3); }
+.swatch.model-4 { background: var(--model-4); }
+.swatch.model-5 { background: var(--model-5); }
+.swatch.model-6 { background: var(--model-6); }
+.swatch.model-7 { background: var(--model-7); }
+.swatch.model-8 { background: var(--model-8); }
+
+.slice.model-1 { stroke: var(--model-1); }
+.slice.model-2 { stroke: var(--model-2); }
+.slice.model-3 { stroke: var(--model-3); }
+.slice.model-4 { stroke: var(--model-4); }
+.slice.model-5 { stroke: var(--model-5); }
+.slice.model-6 { stroke: var(--model-6); }
+.slice.model-7 { stroke: var(--model-7); }
+.slice.model-8 { stroke: var(--model-8); }
+
+/* =========================
    Seed Options
 ========================= */
 #seed-options {
@@ -422,17 +676,26 @@ input[type="checkbox"] {
 /* A wide screen: the weights in their panel, left of the terminal. script.js moves them at
    the same width. The generator page only: the admin page shares .app */
 @media (min-width: 1000px) {
+  /* The blocks share one height, the same margins, and the side ones one width */
   .generator-app {
-    max-width: 924px;
+    max-width: 954px;
     display: grid;
-    grid-template-columns: 300px 600px;
+    grid-template-columns: 330px 600px;
     grid-template-areas: "weights generator";
     gap: 24px;
-    align-items: start;
+    align-items: stretch;
   }
 
   .generator-card {
     grid-area: generator;
+    padding: 1.5rem;
+  }
+
+  /* The terminal takes the height the row gives the card */
+  .generator-card .terminal {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 320px;
   }
 
   .weights-panel {
@@ -440,5 +703,31 @@ input[type="checkbox"] {
     grid-area: weights;
     padding: 1.5rem;
     gap: 0.75rem;
+  }
+}
+
+/* A very wide screen: how a word was made, right of the terminal. script.js draws it there
+   at the same width, in a bubble below it */
+@media (min-width: 1320px) {
+  .generator-app {
+    max-width: 1308px;
+    grid-template-columns: 330px 600px 330px;
+    grid-template-areas: "weights generator word";
+  }
+
+  /* Its content does not size the row: the panel takes the height of the others */
+  .word-panel {
+    display: flex;
+    grid-area: word;
+    padding: 1.5rem;
+    gap: 0.75rem;
+    contain: size;
+  }
+
+  /* A trace longer than the panel scrolls inside it */
+  .word-panel .trace {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
   }
 }

@@ -207,6 +207,25 @@ const CONTRASTS: &[(&str, &str, f64)] = &[
 	("--warning-text", "--warning-surface", 4.5),
 	("--success-text", "--success-surface", 4.5),
 	("--on-tooltip", "--tooltip", 4.5),
+	// The trace of a word, a terminal of its own: its text, its events, the letters in the
+	// color of their model, the focus ring of its buttons
+	("--terminal-text", "--terminal-raised", 4.5),
+	("--terminal-muted", "--terminal-raised", 4.5),
+	("--terminal-user", "--terminal-raised", 4.5),
+	("--terminal-path", "--terminal-raised", 4.5),
+	("--terminal-warning", "--terminal-raised", 4.5),
+	("--terminal-danger", "--terminal-raised", 4.5),
+	("--model-1", "--terminal-raised", 4.5),
+	("--model-2", "--terminal-raised", 4.5),
+	("--model-3", "--terminal-raised", 4.5),
+	("--model-4", "--terminal-raised", 4.5),
+	("--model-5", "--terminal-raised", 4.5),
+	("--model-6", "--terminal-raised", 4.5),
+	("--model-7", "--terminal-raised", 4.5),
+	("--model-8", "--terminal-raised", 4.5),
+	("--focus", "--terminal-raised", 3.0),
+	// The focus ring of a word of the terminal
+	("--focus", "--terminal", 3.0),
 	("--field-border", "--surface", 3.0),
 	("--field-border", "--page", 3.0),
 	("--focus", "--surface", 3.0),
@@ -507,6 +526,66 @@ fn the_weights_have_a_panel_on_a_wide_screen() {
 		front("script.js").contains(&format!("matchMedia(\"(min-width: {width})\")")),
 		"script.js does not move the weights at the width of style.css ({width})"
 	);
+}
+
+#[test]
+fn the_word_detail_has_a_panel_on_a_very_wide_screen() {
+	let tags = tags(&front("index.html"));
+	let panel = tags.iter().find(|t| t.get("id") == Some("word-panel")).expect("no Last Word panel in index.html");
+	assert_eq!(panel.name, "aside");
+	assert!(panel.get("aria-labelledby").is_some(), "the Last Word panel has no title");
+	assert!(tags.iter().any(|t| t.get("id") == Some("word-bubble")), "no bubble for the narrower screens");
+	// style.css shows the panel and script.js draws the word in it: the same width in both
+	let css = without_comments(&front("style.css"));
+	let widths: Vec<&str> = css
+		.match_indices("@media (min-width: ")
+		.map(|(at, found)| {
+			let rest = &css[at + found.len()..];
+			&rest[..rest.find(')').expect("unclosed media query")]
+		})
+		.collect();
+	assert_eq!(widths.len(), 2, "style.css: the wide and the very wide screens expected, found {widths:?}");
+	let script = front("script.js");
+	for width in widths {
+		assert!(script.contains(&format!("matchMedia(\"(min-width: {width})\")")), "script.js does not use the width {width} of style.css");
+	}
+}
+
+#[test]
+fn the_words_and_their_detail_are_reachable_by_keyboard() {
+	// A word of the terminal shows its detail on a keyboard focus as on a hover. The man button,
+	// waiting for the AI definitions, stays reachable so that its tooltip says why it is off:
+	// aria-disabled, not disabled
+	let script = front("script.js");
+	for (code, what) in [
+		("word.tabIndex = 0", "a word of the terminal cannot take the focus"),
+		("\"focusin\"", "a keyboard focus shows no detail"),
+		("\"Escape\"", "Escape does not close the bubble"),
+		("setAttribute(\"aria-disabled\", \"true\")", "the man button is not marked as off"),
+		("word.after(wordBubble)", "the keyboard cannot reach the buttons of the bubble"),
+	] {
+		assert!(script.contains(code), "script.js: {what}");
+	}
+	assert!(!script.contains("man.disabled"), "script.js: the man button can no longer show its tooltip");
+}
+
+#[test]
+fn the_blocks_of_a_wide_screen_share_their_height_and_their_side_width() {
+	// Three blocks of three heights and two side widths looked unfinished: the row stretches
+	// them to one height, and the side columns have the same width
+	let css = without_comments(&front("style.css"));
+	let blocks: Vec<Vec<Rule>> = css.split("@media (min-width: ").skip(1).map(rules).collect();
+	assert_eq!(blocks.len(), 2, "the wide and the very wide screens expected");
+	assert_eq!(property(&blocks[0], ".generator-app", "align-items"), Some("stretch"));
+	let columns = |block: &[Rule]| -> Vec<String> {
+		property(block, ".generator-app", "grid-template-columns").expect("no columns").split_whitespace().map(str::to_string).collect()
+	};
+	let (wide, very_wide) = (columns(&blocks[0]), columns(&blocks[1]));
+	assert_eq!(very_wide.len(), 3);
+	assert_eq!(very_wide[0], very_wide[2], "the side columns differ: {very_wide:?}");
+	assert_eq!(wide[0], very_wide[0], "the weights change width between the two screens");
+	// The Last Word panel takes the height of the row, its trace scrolls inside it
+	assert_eq!(property(&blocks[1], ".word-panel", "contain"), Some("size"));
 }
 
 #[test]

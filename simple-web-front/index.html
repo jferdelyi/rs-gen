@@ -78,7 +78,19 @@
     <aside id="weights-panel" class="card weights-panel" aria-labelledby="weights-panel-title">
       <h2 id="weights-panel-title">Model Weights</h2>
     </aside>
+
+    <!-- On a very wide screen, how a word was made, right of the terminal: the last word
+         generated, or the one hovered or focused. On a narrower one, the bubble below -->
+    <aside id="word-panel" class="card word-panel" aria-labelledby="word-panel-title">
+      <h2 id="word-panel-title">Last Word</h2>
+      <div id="word-panel-body" class="trace">
+        <p class="trace-empty">Generate a word to see how it was made.</p>
+      </div>
+    </aside>
   </div>
+
+  <!-- How a word was made, under the word: placed by script.js -->
+  <div id="word-bubble" class="word-bubble trace hidden" role="group" aria-label="How the word was made"></div>
 
   <!-- Settings Modal -->
   <dialog id="settings-modal" class="modal" aria-labelledby="settings-title">

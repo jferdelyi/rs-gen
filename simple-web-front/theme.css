@@ -20,6 +20,11 @@
   --terminal-muted: #8b949e;
   --terminal-user: #3fb950;
   --terminal-path: #a371f7;
+  /* The trace of a word: a terminal raised over the page, its events */
+  --terminal-raised: #161b22;
+  --terminal-border: #30363d;
+  --terminal-warning: #d29922;
+  --terminal-danger: #f85149;
 
   /* Buttons */
   --primary: #000000;
@@ -52,4 +57,15 @@
   /* Tooltips */
   --tooltip: #1f2328;
   --on-tooltip: #ffffff;
+
+  /* The models of a word (Last Word panel and bubble), read on --terminal-raised: the model
+     with the largest share takes the first color */
+  --model-1: #58a6ff;
+  --model-2: #f0883e;
+  --model-3: #3fb950;
+  --model-4: #bc8cff;
+  --model-5: #f778ba;
+  --model-6: #39c5cf;
+  --model-7: #e3b341;
+  --model-8: #ffa198;
 }
