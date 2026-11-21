@@ -174,6 +174,16 @@ button {
   transform: scale(0.96);
 }
 
+/* A button drawn as underlined text, such as Equal weights */
+.text-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* =========================
    Form Elements
 ========================= */
@@ -219,6 +229,45 @@ input[type="checkbox"] {
   min-width: 50px;
   text-align: right;
   font-weight: 600;
+}
+
+/* =========================
+   Model weights: in the settings dialog, or in their panel on a wide screen
+========================= */
+.weights-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.weights-note {
+  color: var(--muted);
+}
+
+/* Shown on a wide screen only, see the end of this file */
+.weights-panel {
+  display: none;
+}
+
+.weights-panel h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.weights-panel .input-group {
+  margin-bottom: 0.5rem;
+}
+
+.weights-panel .label-title {
+  margin-bottom: 0.15rem;
+  font-size: 13px;
+}
+
+.weights-panel .slider-value {
+  min-width: 44px;
+  font-size: 13px;
 }
 
 /* =========================
@@ -367,5 +416,29 @@ input[type="checkbox"] {
 
   .action-btn {
     padding: 10px 8px;
+  }
+}
+
+/* A wide screen: the weights in their panel, left of the terminal. script.js moves them at
+   the same width */
+@media (min-width: 1000px) {
+  .app {
+    max-width: 924px;
+    display: grid;
+    grid-template-columns: 300px 600px;
+    grid-template-areas: "weights generator";
+    gap: 24px;
+    align-items: start;
+  }
+
+  .generator-card {
+    grid-area: generator;
+  }
+
+  .weights-panel {
+    display: flex;
+    grid-area: weights;
+    padding: 1.5rem;
+    gap: 0.75rem;
   }
 }

@@ -493,6 +493,23 @@ fn the_icon_buttons_are_drawn_like_the_other_buttons() {
 }
 
 #[test]
+fn the_weights_have_a_panel_on_a_wide_screen() {
+	let tags = tags(&front("index.html"));
+	let panel = tags.iter().find(|t| t.get("id") == Some("weights-panel")).expect("no weights panel in index.html");
+	assert_eq!(panel.name, "aside");
+	assert!(panel.get("aria-labelledby").is_some(), "the weights panel has no title");
+	assert!(tags.iter().any(|t| t.get("id") == Some("equal-weights")), "no Equal weights button");
+	// style.css shows the panel and script.js moves the weights into it: the same width in both
+	let css = without_comments(&front("style.css"));
+	let at = css.find("@media (min-width: ").expect("no wide screen block in style.css") + "@media (min-width: ".len();
+	let width = &css[at..at + css[at..].find(')').expect("unclosed media query")];
+	assert!(
+		front("script.js").contains(&format!("matchMedia(\"(min-width: {width})\")")),
+		"script.js does not move the weights at the width of style.css ({width})"
+	);
+}
+
+#[test]
 fn copy_api_url_stays_on_one_line_on_a_phone() {
 	// With square icon buttons, "Copy API URL" took two lines at 375 px in WebKit: on a narrow
 	// screen the row is tighter, one line at 360 and 375 px

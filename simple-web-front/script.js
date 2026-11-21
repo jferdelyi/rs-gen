@@ -28,6 +28,10 @@ const customSeed = document.getElementById("custom-seed");
 const randomSeed = document.getElementById("random-seed");
 
 const modelContainer = document.getElementById("model-intensities");
+const weights = document.getElementById("weights");
+const weightsDialogTitle = document.getElementById("weights-dialog-title");
+const weightsPanel = document.getElementById("weights-panel");
+const equalWeightsBtn = document.getElementById("equal-weights");
 
 /* =============================
    Default Settings
@@ -213,6 +217,30 @@ async function loadModels() {
 }
 
 /* =============================
+   Weights: in the settings dialog, or in their panel on a wide screen
+============================= */
+// One set of sliders, moved from one place to the other: nothing to keep in step.
+// Same width as the wide screen block of style.css
+const wideScreen = window.matchMedia("(min-width: 1000px)");
+
+function placeWeights() {
+    if (wideScreen.matches) {
+        weightsPanel.appendChild(weights);
+    } else {
+        weightsDialogTitle.after(weights);
+    }
+    weightsDialogTitle.classList.toggle("hidden", wideScreen.matches);
+}
+
+// Every model at the same weight, 100%, as on a first visit; each slider saves the settings
+function equalWeights() {
+    modelContainer.querySelectorAll("input[type=range]").forEach(slider => {
+        slider.value = 100;
+        slider.dispatchEvent(new Event("input"));
+    });
+}
+
+/* =============================
    Terminal
 ============================= */
 function initTerminal() {
@@ -341,6 +369,10 @@ closeSettingsBtn.addEventListener("click",
 
 resetBtn.addEventListener("click", initTerminal);
 
+equalWeightsBtn.addEventListener("click", equalWeights);
+
+wideScreen.addEventListener("change", placeWeights);
+
 // The dialog covers the screen around its card: a press on the dialog itself is outside the card
 settingsModal.addEventListener("mousedown", e => {
     if (e.target === settingsModal) {
@@ -373,6 +405,7 @@ copyBtn.addEventListener("click", async () => {
    Init
 ============================= */
 async function init() {
+    placeWeights();
     await loadModels();
     loadSettings();
     initTerminal();

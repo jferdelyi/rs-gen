@@ -23,7 +23,7 @@
 <body>
 
   <div class="app">
-    <div class="card">
+    <div class="card generator-card">
 
       <!-- Terminal -->
       <div id="terminal" class="terminal"></div>
@@ -71,6 +71,13 @@
       </div>
 
     </div>
+
+    <!-- On a wide screen, the weights of the models next to the terminal: script.js moves them
+         here from the settings dialog. After the terminal in the page, so that the keyboard
+         reaches Generate first -->
+    <aside id="weights-panel" class="card weights-panel" aria-labelledby="weights-panel-title">
+      <h2 id="weights-panel-title">Model Weights</h2>
+    </aside>
   </div>
 
   <!-- Settings Modal -->
@@ -162,8 +169,14 @@
       </div>
 
       <!-- Model Intensities -->
-      <h3>Model Weights</h3>
-      <div id="model-intensities">Loading models...</div>
+      <h3 id="weights-dialog-title">Model Weights</h3>
+      <div id="weights" class="weights">
+        <div id="model-intensities">Loading models...</div>
+        <div class="weights-foot">
+          <button id="equal-weights" class="text-btn" title="Give every model the same weight, 100%">Equal weights</button>
+          <span class="weights-note">Saved in this browser</span>
+        </div>
+      </div>
 
       <!-- Close Modal -->
       <button id="close-settings" class="primary-btn" title="Close the settings: they are saved in this browser">
