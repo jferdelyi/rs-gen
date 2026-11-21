@@ -209,6 +209,10 @@ async function loadModels() {
             slider.addEventListener("input", () => {
                 valueSpan.textContent = `${slider.value}%`;
                 saveSettings();
+                // A weight moved by hand: the weights from before Equal weights are forgotten
+                if (!settingWeights) {
+                    forgetWeightsBeforeEqual();
+                }
             });
 
             row.append(slider, valueSpan);
@@ -237,12 +241,49 @@ function placeWeights() {
     weightsDialogTitle.classList.toggle("hidden", wideScreen.matches);
 }
 
-// Every model at the same weight, 100%, as on a first visit; each slider saves the settings
-function equalWeights() {
+// The weights from before Equal weights, by model, to put them back; none once a weight is
+// moved by hand
+let weightsBeforeEqual = null;
+// True while the page sets the weights itself, not the visitor
+let settingWeights = false;
+
+const EQUAL_LABEL = "Equal weights";
+const EQUAL_TIP = "Give every model the same weight, 100%";
+const UNDO_LABEL = "Undo equal weights";
+const UNDO_TIP = "Put back the weights from before Equal weights";
+
+// Sets the weight of each slider, then saves the settings once per slider
+function setWeights(weightOf) {
+    settingWeights = true;
     modelContainer.querySelectorAll("input[type=range]").forEach(slider => {
-        slider.value = 100;
+        slider.value = weightOf(slider.dataset.model, slider.value);
         slider.dispatchEvent(new Event("input"));
     });
+    settingWeights = false;
+}
+
+function forgetWeightsBeforeEqual() {
+    weightsBeforeEqual = null;
+    equalWeightsBtn.textContent = EQUAL_LABEL;
+    equalWeightsBtn.title = EQUAL_TIP;
+}
+
+// Every model at the same weight, 100%, as on a first visit; a second press puts the weights
+// from before back
+function equalWeights() {
+    if (weightsBeforeEqual) {
+        const before = weightsBeforeEqual;
+        setWeights((model, value) => before[model] ?? value);
+        forgetWeightsBeforeEqual();
+        return;
+    }
+    const before = Object.fromEntries(
+        Array.from(modelContainer.querySelectorAll("input[type=range]")).map(slider => [slider.dataset.model, slider.value])
+    );
+    setWeights(() => 100);
+    weightsBeforeEqual = before;
+    equalWeightsBtn.textContent = UNDO_LABEL;
+    equalWeightsBtn.title = UNDO_TIP;
 }
 
 /* =============================

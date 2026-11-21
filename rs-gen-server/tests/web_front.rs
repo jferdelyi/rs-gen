@@ -589,6 +589,20 @@ fn the_blocks_of_a_wide_screen_share_their_height_and_their_side_width() {
 }
 
 #[test]
+fn equal_weights_can_be_undone() {
+	// Equal weights keeps the weights from before: a second press puts them back, and a weight
+	// moved by hand forgets them
+	let script = front("script.js");
+	for (code, what) in [
+		("weightsBeforeEqual = before", "the weights from before Equal weights are not kept"),
+		("\"Undo equal weights\"", "the button does not offer to put them back"),
+		("forgetWeightsBeforeEqual();", "a weight moved by hand does not forget them"),
+	] {
+		assert!(script.contains(code), "script.js: {what}");
+	}
+}
+
+#[test]
 fn the_wide_layout_of_the_generator_page_stays_out_of_the_admin_page() {
 	// The grid of the generator page was given to .app, which the admin page uses too: from
 	// 1000 px its login card and its cards shrank to the left (align-items: start)
