@@ -422,11 +422,10 @@ input[type="checkbox"] {
   background: var(--terminal-border);
 }
 
-/* A narrow trace, as in the panel or on a phone: the number and the context give way, and the
-   event goes under its letter */
-@container trace (max-width: 420px) {
+/* A narrow trace, as in the panel or on a phone: the number gives way, and the event goes under
+   its letter */
+@container trace (max-width: 400px) {
   .col-index,
-  .col-context,
   .col-event {
     display: none;
   }
@@ -470,6 +469,29 @@ input[type="checkbox"] {
 .trace-buttons {
   display: flex;
   gap: 8px;
+}
+
+/* The close button of the bubble, kept at the top while the bubble scrolls */
+.trace-bar {
+  position: sticky;
+  top: -14px;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  margin: -14px -16px -6px;
+  padding: 8px 16px 6px;
+  background: var(--terminal-raised);
+}
+
+/* How to read a trace, opened on demand */
+.trace-help summary {
+  cursor: pointer;
+}
+
+.trace-help ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--terminal-muted);
 }
 
 /* A button of the terminal: [ copy ] */
@@ -708,10 +730,12 @@ input[type="checkbox"] {
 
 /* A very wide screen: how a word was made, right of the terminal. script.js draws it there
    at the same width, in a bubble below it */
-@media (min-width: 1320px) {
+@media (min-width: 1360px) {
+  /* The trace takes the room left, up to 640 px, inside a margin of 24 px on each side */
   .generator-app {
-    max-width: 1308px;
-    grid-template-columns: 330px 600px 330px;
+    max-width: 1666px;
+    padding: 0 24px;
+    grid-template-columns: 330px 600px minmax(330px, 640px);
     grid-template-areas: "weights generator word";
   }
 

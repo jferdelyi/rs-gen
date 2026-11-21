@@ -570,22 +570,35 @@ fn the_words_and_their_detail_are_reachable_by_keyboard() {
 }
 
 #[test]
-fn the_blocks_of_a_wide_screen_share_their_height_and_their_side_width() {
-	// Three blocks of three heights and two side widths looked unfinished: the row stretches
-	// them to one height, and the side columns have the same width
+fn the_blocks_of_a_wide_screen_share_their_height() {
+	// Three blocks of three heights looked unfinished: the row stretches them to one height.
+	// The weights keep one width on both screens; the trace takes the room left, from the width
+	// of the weights up to 640 px, where its table shows every column
 	let css = without_comments(&front("style.css"));
 	let blocks: Vec<Vec<Rule>> = css.split("@media (min-width: ").skip(1).map(rules).collect();
 	assert_eq!(blocks.len(), 2, "the wide and the very wide screens expected");
 	assert_eq!(property(&blocks[0], ".generator-app", "align-items"), Some("stretch"));
-	let columns = |block: &[Rule]| -> Vec<String> {
-		property(block, ".generator-app", "grid-template-columns").expect("no columns").split_whitespace().map(str::to_string).collect()
-	};
-	let (wide, very_wide) = (columns(&blocks[0]), columns(&blocks[1]));
-	assert_eq!(very_wide.len(), 3);
-	assert_eq!(very_wide[0], very_wide[2], "the side columns differ: {very_wide:?}");
-	assert_eq!(wide[0], very_wide[0], "the weights change width between the two screens");
+	let wide = property(&blocks[0], ".generator-app", "grid-template-columns").expect("no columns on a wide screen");
+	let very_wide = property(&blocks[1], ".generator-app", "grid-template-columns").expect("no columns on a very wide screen");
+	let weights = wide.split_whitespace().next().expect("no column");
+	assert_eq!(very_wide, format!("{weights} 600px minmax({weights}, 640px)"));
 	// The Last Word panel takes the height of the row, its trace scrolls inside it
 	assert_eq!(property(&blocks[1], ".word-panel", "contain"), Some("size"));
+}
+
+#[test]
+fn the_trace_explains_itself_without_tooltips() {
+	// A phone shows no tooltip: the trace says what it shows in words, on demand, and its bubble
+	// that fills a phone has a button to close it
+	let script = front("script.js");
+	for (code, what) in [
+		("element(\"details\", \"trace-help\")", "the trace has no help to open"),
+		("\"How to read this\"", "the help has no title"),
+		("\"[ close ]\"", "the bubble cannot be closed on a phone"),
+		("had never seen these letters", "the fallbacks are not said in words"),
+	] {
+		assert!(script.contains(code), "script.js: {what}");
+	}
 }
 
 #[test]

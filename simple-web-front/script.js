@@ -386,7 +386,7 @@ function typeWord(trace) {
    panel on a very wide screen, in a bubble under the word otherwise
 ============================= */
 // Same width as the very wide screen block of style.css
-const veryWideScreen = window.matchMedia("(min-width: 1320px)");
+const veryWideScreen = window.matchMedia("(min-width: 1360px)");
 
 // The model with the largest share of a word takes the first color, up to the eighth
 const MODEL_COLORS = 8;
@@ -456,27 +456,38 @@ function cell(row, text, className, tip) {
     return td;
 }
 
-// What happened while a letter, or the end, was chosen
-function events(step, isEnd) {
+// The letters looked at, in words: "the start of the word", "1 letter", "4 letters"
+function lettersLooked(step) {
+    const count = [...step.context].length;
+    if (count === 0) return "the start of the word";
+    return `${count} ${count === 1 ? "letter" : "letters"}`;
+}
+
+// What happened while a letter, or the end, was chosen; `before` is the number of letters
+// before it in the word
+function events(step, isEnd, before) {
     const found = [];
     const fallbacks = step.fallbacks.map(labelOf);
     if (fallbacks.length === 1) {
-        found.push([`${fallbacks[0]} could not go on`, "trace-warning", "This model was drawn first and knew no letter after these ones"]);
+        found.push([`${fallbacks[0]} had never seen these letters`, "trace-warning", "This model was drawn first: the next one was tried"]);
     } else if (fallbacks.length > 1) {
-        found.push([`${fallbacks.length} models could not go on`, "trace-warning", `Drawn first, they knew no letter after these ones: ${fallbacks.join(", ")}`]);
+        found.push([`${fallbacks.length} models had never seen these letters`, "trace-warning", `Drawn first, one after the other: ${fallbacks.join(", ")}`]);
     }
-    if (step.reductions.length > 0) {
-        found.push([`shortened from order ${step.reductions[0]}`, "trace-danger", "No model knew the longer context: fewer letters were looked at"]);
-    }
-    if (step.random_n) {
-        found.push(["order drawn at random", "trace-warning", "The setting Randomness drew how many letters to look at"]);
+    // The letters first looked at, the start of the word not counted
+    const first = step.reductions.length > 0 ? Math.min(step.reductions[0] - 1, before) : 0;
+    if (step.reductions.length > 0 && step.random_n) {
+        found.push([`Randomness drew ${first} letters, no model knew them all: looked at ${lettersLooked(step)}`, "trace-danger", "Fewer letters were looked at, until a model knew them"]);
+    } else if (step.reductions.length > 0) {
+        found.push([`no model knew the last ${first} letters: looked at ${lettersLooked(step)}`, "trace-danger", "No model had seen them all: fewer letters were looked at"]);
+    } else if (step.random_n) {
+        found.push([`looked at ${lettersLooked(step)} only (Randomness)`, "trace-warning", "The Randomness setting drew how many letters to look at"]);
     }
     if (isEnd) {
         found.push(["end of the word", "trace-muted", ""]);
     } else if (step.choices === 1) {
-        found.push(["only letter possible", "trace-muted", "The training files show a single letter after these ones: nothing was drawn"]);
+        found.push(["the only letter ever seen here", "trace-muted", "Nothing was drawn"]);
     } else if (found.length === 0) {
-        found.push([`drawn among ${step.choices} letters`, "trace-muted", ""]);
+        found.push([`1 of ${step.choices} possible letters`, "trace-muted", ""]);
     }
     return found;
 }
@@ -511,10 +522,21 @@ const TRACE_COLUMNS = [
     ["#", "col-index", "Position of the letter in the word"],
     ["letter", "", "The letter, in the color of the model that gave it"],
     ["model", "", "The model that gave the letter"],
-    ["order", "", "How many letters were looked at, plus one. ⚄: drawn at random (Randomness). 7→5: shortened, no model knew the longer context"],
-    ["after", "col-context", "The letters looked at to choose this one; ^ is the start of the word"],
-    ["chance", "", "How often this letter came after them in the training files"],
+    ["after", "", "The letters looked at to choose this one; ^ is the start of the word"],
+    ["chance", "", "How often this letter came after them in the training words of the model"],
     ["event", "col-event", "What happened while this letter was chosen"],
+];
+
+// How to read a trace: shown on demand, read on a phone as well, where there is no tooltip
+const TRACE_HELP = [
+    "Each letter comes from one model, drawn at random according to the weights.",
+    "after: the letters the model looked at before choosing; ^ is the start of the word.",
+    "chance: how often this letter came after them in the training words of the model.",
+    "had never seen these letters: the model drawn first knew nothing after them, so the next one was tried.",
+    "no model knew the last N letters: none had seen them all, so fewer letters were looked at.",
+    "looked at N letters only (Randomness): the Randomness setting drew how many letters to look at.",
+    "the only letter ever seen here: there was no choice to draw.",
+    "Refused first: words generated before this one, already in the training files (Retry Attempts).",
 ];
 
 // Draws how a word was made in `container`, as a terminal would: the word in the colors of its
@@ -560,24 +582,19 @@ function renderTrace(trace, container) {
         header.appendChild(th);
     }
     const body = table.createTBody();
-    const rows = trace.letters.map((letter, i) => [String(seed.length + i + 1), letter.letter, `model-${colorOf(letter.model)}`, letter, false]);
-    rows.push(["", "⏎", "trace-muted", trace.end, true]);
-    for (const [index, letter, letterClass, step, isEnd] of rows) {
+    const rows = trace.letters.map((letter, i) => [String(seed.length + i + 1), letter.letter, `model-${colorOf(letter.model)}`, letter, false, seed.length + i]);
+    rows.push(["", "⏎", "trace-muted", trace.end, true, seed.length + trace.letters.length]);
+    for (const [index, letter, letterClass, step, isEnd, before] of rows) {
         const row = body.insertRow();
         cell(row, index, "col-index trace-muted");
         cell(row, letter, letterClass, isEnd ? "End of the word" : "");
         cell(row, labelOf(step.model));
-        // Shortened: the first order tried and the one used; every step is in the tooltip
-        const shortened = step.reductions.length > 0;
-        const orderTip = [
-            shortened ? `Shortened ${[...step.reductions, step.n].join(" → ")}: no model knew the longer context` : "",
-            step.random_n ? "Drawn at random (Randomness)" : "",
-        ].filter(Boolean).join(". ");
-        const order = shortened ? `${step.reductions[0]}→${step.n}` : String(step.n);
-        cell(row, order + (step.random_n ? " ⚄" : ""), shortened ? "trace-danger" : step.random_n ? "trace-warning" : "", orderTip);
-        cell(row, `${step.at_start ? "^" : ""}${step.context}`, "col-context", step.at_start ? "^ is the start of the word" : "");
+        // The letters looked at: the last 6 only when they are many, all of them in the tooltip
+        const context = [...step.context];
+        const shown = context.length > 7 ? `…${context.slice(-6).join("")}` : `${step.at_start ? "^" : ""}${step.context}`;
+        cell(row, shown, "", `Looked at ${step.at_start ? "the start of the word" : ""}${step.at_start && context.length > 0 ? " and " : ""}${context.length > 0 ? `"${step.context}"` : ""}`);
         cell(row, percent(step.count, step.total), "",
-            `${step.count} of ${step.total} times, among ${step.choices} ${step.choices === 1 ? "letter" : "letters"}`);
+            `${step.count} of ${step.total} times, among ${step.choices} possible ${step.choices === 1 ? "letter" : "letters"}`);
         // The event, in its column; on a narrow trace, on its own line under the letter
         const event = cell(row, "", "col-event");
         const eventLine = body.insertRow();
@@ -585,7 +602,7 @@ function renderTrace(trace, container) {
         const eventBelow = cell(eventLine, "");
         eventBelow.colSpan = TRACE_COLUMNS.length;
         for (const target of [event, eventBelow]) {
-            events(step, isEnd).forEach(([text, className, tip], i) => {
+            events(step, isEnd, before).forEach(([text, className, tip], i) => {
                 if (i > 0) target.append(" · ");
                 const span = element("span", className, text);
                 if (tip) span.title = tip;
@@ -605,6 +622,14 @@ function renderTrace(trace, container) {
         if (s.reduceRandom) settings.push("advanced randomness");
         parts.push(element("p", "trace-attempts", `Settings: ${settings.join(" · ")}`));
     }
+
+    const help = element("details", "trace-help");
+    const list = element("ul");
+    for (const line of TRACE_HELP) {
+        list.appendChild(element("li", "", line));
+    }
+    help.append(element("summary", "", "How to read this"), list);
+    parts.push(help);
 
     const buttons = element("div", "trace-buttons");
     const copy = element("button", "term-btn", "[ copy ]");
@@ -626,6 +651,22 @@ function renderTrace(trace, container) {
     man.setAttribute("aria-disabled", "true");
     buttons.append(copy, man);
     parts.push(buttons);
+
+    // The bubble can fill a phone: its close button stays at the top while it scrolls
+    if (container === wordBubble) {
+        const bar = element("div", "trace-bar");
+        const close = element("button", "term-btn", "[ close ]");
+        close.title = "Close (Escape)";
+        close.addEventListener("click", () => {
+            hideBubble();
+            if (shownWord) {
+                quietFocus = true;
+                shownWord.focus();
+            }
+        });
+        bar.appendChild(close);
+        parts.unshift(bar);
+    }
 
     container.replaceChildren(...parts);
 }
