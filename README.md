@@ -149,7 +149,7 @@ http://127.0.0.1:5000/v1/generate?max_n=0&nb_try=100&randomness=0.1&reduce_rando
 | --------------- | ---------------------------------------------------------------------------------------- |
 | `max_n`         | Maximum N-gram size (`0` = unlimited)                                                    |
 | `nb_try`        | Maximum attempts to avoid generating a word already present in the database (at most `1000`) |
-| `randomness`    | Randomness factor (`0.0` to `1.0`) controlling random N-gram selection                   |
+| `randomness`    | Chance (`0.0` to `1.0`) that the order of a letter is drawn at random, between 2 and the longest order the word allows there (capped by `max_n`) |
 | `reduce_random` | Apply randomness again during key reduction (highly exploratory results)                 |
 | `seed`          | `custom:<string>` or `random:<n>` (N-gram order of the starting key, `0` = random)      |
 | `intensity`     | Model weights formatted as `<database>:<value>`; values are normalized before prediction |

@@ -444,7 +444,10 @@ impl Generator {
 		}
 	}
 
-	/// Computes the next n, and whether it was drawn at random
+	/// Computes the next n, and whether it was drawn at random.
+	///
+	/// The longest order the word allows is its length so far plus one, capped by `max_n`
+	/// (0: no cap). A random order is drawn up to it: a longer one could only be shortened.
 	fn compute_n(prefix_size: usize, max_n: usize, randomness: f32) -> Result<(usize, bool), String> {
 		let key_len = prefix_size;
 		let n = if max_n == 0 {
@@ -452,7 +455,7 @@ impl Generator {
 		} else {
 			max_n.min(key_len + 1)
 		};
-		Generator::compute_randomness(randomness, max_n, n)
+		Generator::compute_randomness(randomness, n, n)
 	}
 
 	/// Computes a possibly randomized n-gram size based on a randomness factor.
@@ -463,7 +466,7 @@ impl Generator {
 	/// # Parameters
 	/// - `randomness`: Probability in the range [0.0, 1.0] of selecting
 	///   a random n-gram size.
-	/// - `max`: Maximum n-gram size allowed (inclusive).
+	/// - `max`: Maximum n-gram size allowed (inclusive): the longest order the word allows.
 	/// - `default`: Default n-gram size used when randomness is not applied.
 	///
 	/// # Returns
@@ -800,6 +803,44 @@ mod tests {
 		for trace in traces_within_deadline(generator, input, 20) {
 			assert!(steps(&trace).all(|step| step.random_n), "{trace:?}");
 		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	// The order drawn for each step of a trace, before any shortening, and the longest order the
+	// word allowed there: its letters so far, the start, plus one
+	fn drawn_orders(trace: &WordTrace) -> Vec<(usize, usize)> {
+		let seed = trace.seed.as_ref().map_or(0, |seed| seed.text.chars().count());
+		steps(trace)
+			.enumerate()
+			.filter(|(_, step)| step.random_n)
+			.map(|(i, step)| (step.reductions.first().copied().unwrap_or(step.n), seed + i + 2))
+			.collect()
+	}
+
+	#[test]
+	fn a_random_order_never_exceeds_the_word() {
+		// With a maximum of 30, an order of 27 was drawn in the middle of a 4 letter word, then
+		// shortened step by step: 42 % of the random orders on the 11 models
+		let (generator, dir) = generator_with("random-order-cap", &[("low", "abcdefgh\n")]);
+		let mut input = generator.make_prediction_input();
+		input.set_randomness(1.0).unwrap();
+		input.max_n = 30;
+		for trace in traces_within_deadline(generator, input, 50) {
+			for (drawn, longest) in drawn_orders(&trace) {
+				assert!(drawn <= longest, "order {drawn} drawn where the word allows {longest}: {trace:?}");
+			}
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn without_a_maximum_a_random_order_is_not_always_two() {
+		// Without a maximum, the random order was always 2
+		let (generator, dir) = generator_with("random-order-no-cap", &[("low", "abcdefgh\n")]);
+		let mut input = generator.make_prediction_input();
+		input.set_randomness(1.0).unwrap();
+		let traces = traces_within_deadline(generator, input, 50);
+		assert!(traces.iter().flat_map(drawn_orders).any(|(drawn, _)| drawn > 2));
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 
