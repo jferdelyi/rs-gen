@@ -510,6 +510,19 @@ fn the_weights_have_a_panel_on_a_wide_screen() {
 }
 
 #[test]
+fn the_wide_layout_of_the_generator_page_stays_out_of_the_admin_page() {
+	// The grid of the generator page was given to .app, which the admin page uses too: from
+	// 1000 px its login card and its cards shrank to the left (align-items: start)
+	let css = without_comments(&front("style.css"));
+	let (_, wide) = css.split_once("@media (min-width: ").expect("no wide screen block in style.css");
+	let selectors: Vec<String> = rules(wide).iter().flat_map(|r| r.selector.split(',').map(|s| s.trim().to_string())).collect();
+	assert!(!selectors.iter().any(|s| s == ".app"), "the wide screen block of style.css styles .app, shared with the admin page");
+	assert!(selectors.iter().any(|s| s == ".generator-app"), "the wide screen block does not lay out the generator page");
+	assert!(tags(&front("index.html")).iter().any(|t| t.has_class("app") && t.has_class("generator-app")));
+	assert!(!tags(&front("admin.html")).iter().any(|t| t.has_class("generator-app")));
+}
+
+#[test]
 fn copy_api_url_stays_on_one_line_on_a_phone() {
 	// With square icon buttons, "Copy API URL" took two lines at 375 px in WebKit: on a narrow
 	// screen the row is tighter, one line at 360 and 375 px

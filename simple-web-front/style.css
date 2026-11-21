@@ -420,9 +420,9 @@ input[type="checkbox"] {
 }
 
 /* A wide screen: the weights in their panel, left of the terminal. script.js moves them at
-   the same width */
+   the same width. The generator page only: the admin page shares .app */
 @media (min-width: 1000px) {
-  .app {
+  .generator-app {
     max-width: 924px;
     display: grid;
     grid-template-columns: 300px 600px;
