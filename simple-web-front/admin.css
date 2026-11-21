@@ -184,6 +184,25 @@ input[type="password"] {
   border-radius: 14px;
 }
 
+/* A hidden model: grey background, dashed border, name and values in grey, status as a pill.
+   The buttons keep their colors */
+.model-card-hidden {
+  background: var(--page);
+  border-style: dashed;
+  border-color: var(--field-border);
+}
+
+.model-card-hidden .model-name,
+.model-card-hidden dd {
+  color: var(--muted);
+}
+
+.model-card-hidden .status-hidden {
+  background: var(--card-border);
+  border-radius: 999px;
+  padding: 1px 10px;
+}
+
 .model-card-head {
   display: flex;
   justify-content: space-between;

@@ -262,7 +262,8 @@ function element(tag, className, text = "") {
 
 // One card per model: name and status, its figures two by two, its actions
 function modelCard(model) {
-    const card = element("article", "model-card");
+    // The status in the class too: a hidden model is drawn apart
+    const card = element("article", `model-card model-card-${model.status}`);
 
     const head = element("div", "model-card-head");
     const status = element("span", `status status-${model.status}`, statusLabel(model));

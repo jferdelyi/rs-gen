@@ -187,6 +187,9 @@ const CONTRASTS: &[(&str, &str, f64)] = &[
 	("--text", "--surface", 4.5),
 	("--text", "--page", 4.5),
 	("--muted", "--surface", 4.5),
+	// A hidden model card, and its status drawn as a pill
+	("--muted", "--page", 4.5),
+	("--muted", "--card-border", 4.5),
 	("--terminal-text", "--terminal", 4.5),
 	("--terminal-muted", "--terminal", 4.5),
 	("--terminal-user", "--terminal", 4.5),
@@ -442,6 +445,20 @@ fn a_row_of_fixed_buttons_shrinks_on_a_narrow_screen() {
 	for file in ["theme.css", "style.css"] {
 		assert!(widths(&front(file)).is_empty(), "{file} gives .fixed-btn a width");
 	}
+}
+
+#[test]
+fn a_hidden_model_card_is_drawn_apart_from_a_shown_one() {
+	// Both cards were white with a thin border: a hidden model was mistaken for a shown one.
+	// The grey of its text on its background is checked in CONTRASTS
+	assert!(front("admin.js").contains("`model-card model-card-${model.status}`"), "admin.js does not mark a card with its status");
+	let card = rules(&front("admin.css"))
+		.into_iter()
+		.find(|r| r.selector == ".model-card-hidden")
+		.expect("no .model-card-hidden rule in admin.css");
+	let value = |property: &str| card.declarations.iter().find(|(p, _)| p == property).map(|(_, v)| v.as_str());
+	assert_eq!(value("background"), Some("var(--page)"));
+	assert_eq!(value("border-style"), Some("dashed"));
 }
 
 #[test]
