@@ -37,6 +37,8 @@ struct GenerateParams {
 	seed: Option<String>,
 	/// Per-model intensity weights, format: "name1:0.5,name2:0.25"
 	intensity: Option<String>,
+	/// True: the answer is the trace of the word, in JSON, instead of the word as text
+	trace: Option<bool>,
 }
 
 /// Shared application state for Actix
@@ -185,6 +187,12 @@ async fn get_generated(
 		}
 	}
 
+	if query.trace == Some(true) {
+		return match generator.predict_with_trace(&input) {
+			Ok(trace) => HttpResponse::Ok().json(trace),
+			Err(e) => HttpResponse::InternalServerError().body(e),
+		};
+	}
 	match generator.predict(&input) {
 		Ok(result) => HttpResponse::Ok().body(result),
 		Err(e) => HttpResponse::InternalServerError().body(e),
@@ -277,7 +285,7 @@ mod tests {
 	use actix_web::test::{self, TestRequest};
 
 	fn params(nb_try: Option<usize>) -> GenerateParams {
-		GenerateParams { max_n: None, nb_try, randomness: None, reduce_random: None, seed: None, intensity: None }
+		GenerateParams { max_n: None, nb_try, randomness: None, reduce_random: None, seed: None, intensity: None, trace: None }
 	}
 
 	#[test]
@@ -297,6 +305,52 @@ mod tests {
 		// '<' and '>' are letters: kept as they are
 		let query = GenerateParams { seed: Some("custom:<a>".to_owned()), ..params(None) };
 		assert!(matches!(query.start_seed(), Ok(StartSeed::Custom(seed)) if seed == "<a>"));
+	}
+
+	// The fields of a trace these tests read
+	#[derive(Deserialize)]
+	struct Trace {
+		word: String,
+		letters: Vec<Letter>,
+		end: Letter,
+	}
+
+	#[derive(Deserialize)]
+	struct Letter {
+		#[serde(default)]
+		letter: Option<char>,
+		model: String,
+		count: u32,
+		total: u64,
+	}
+
+	#[actix_web::test]
+	async fn trace_true_answers_the_trace_in_json() {
+		let dir = std::env::temp_dir().join(format!("rs-gen-server-{}-trace", std::process::id()));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		std::fs::write(dir.join("low.dat"), "abc\n").unwrap();
+		let state = web::Data::new(AppState::new(&dir, None).unwrap());
+		let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+		let response = test::call_service(&app, TestRequest::get().uri("/v1/generate?trace=true&nb_try=0&intensity=low:1").to_request()).await;
+		assert_eq!(response.status(), StatusCode::OK);
+		assert_eq!(response.headers().get("content-type").unwrap(), "application/json");
+		let trace: Trace = test::read_body_json(response).await;
+		assert_eq!(trace.word, "abc");
+		assert_eq!(trace.letters.iter().map(|l| l.letter.unwrap()).collect::<String>(), "abc");
+		assert!(trace.letters.iter().chain(std::iter::once(&trace.end)).all(|l| l.model == "low" && l.count == 1 && l.total == 1));
+		assert_eq!(trace.end.letter, None);
+
+		// Without trace, the word as text, as before
+		let response = test::call_service(&app, TestRequest::get().uri("/v1/generate?nb_try=0&intensity=low:1").to_request()).await;
+		assert_ne!(response.headers().get("content-type").map(|value| value.to_str().unwrap()), Some("application/json"));
+		assert_eq!(test::read_body(response).await, "abc");
+
+		// A refused seed stays a bad request
+		let response = test::call_service(&app, TestRequest::get().uri("/v1/generate?trace=true&seed=custom:%02a&intensity=low:1").to_request()).await;
+		assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 
 	#[actix_web::test]

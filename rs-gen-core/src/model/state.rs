@@ -23,6 +23,16 @@ use serde::{Deserialize, Serialize};
 /// A model holds millions of states and 81 % of them have a single transition:
 /// the first transition is stored in the state itself, and only the states with more
 /// than one transition allocate the others. A state stays 24 bytes.
+/// A character drawn from a state, with its odds: `count` of the `total` occurrences of the
+/// state, among `choices` possible characters (1: the character was forced, nothing was drawn).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Draw {
+	pub(crate) letter: char,
+	pub(crate) count: u32,
+	pub(crate) total: u64,
+	pub(crate) choices: usize,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct State {
 	/// First transition and the number of times it was observed.
@@ -94,29 +104,37 @@ impl State {
 	/// - Subtracts randomly generated number from cumulative counts to select a bucket
 	///
 	/// Returns `None` if the state has no transitions.
-	pub fn predict(&self) -> Option<char> {
+	#[cfg(test)]
+	pub(crate) fn predict(&self) -> Option<char> {
+		self.draw().map(|draw| draw.letter)
+	}
+
+	/// Predicts the next character as `predict` does, with the odds it had.
+	pub(crate) fn draw(&self) -> Option<Draw> {
 		if self.first.1 == 0 {
 			return None;
 		}
 		// Most states have a single transition: no random number needed
 		if self.others.is_none() {
-			return Some(self.first.0);
+			return Some(Draw { letter: self.first.0, count: self.first.1, total: u64::from(self.first.1), choices: 1 });
 		}
 
 		// Compute the total number of occurrences
-		let total: u64 = self.transitions().map(|(_, occurrence)| u64::from(*occurrence)).sum();
+		let (total, choices) = self
+			.transitions()
+			.fold((0u64, 0usize), |(total, choices), (_, occurrence)| (total + u64::from(*occurrence), choices + 1));
 
 		// Randomly select a character
 		let mut r = rand::rng().random_range(0..total);
-		let mut fallback: Option<char> = None;
+		let mut fallback: Option<Draw> = None;
 
 		for (next_char, occurrence) in self.transitions() {
-			let occurrence = u64::from(*occurrence);
-			if r < occurrence {
-				return Some(*next_char);
+			let draw = Draw { letter: *next_char, count: *occurrence, total, choices };
+			if r < u64::from(*occurrence) {
+				return Some(draw);
 			}
-			r -= occurrence;
-			fallback = Some(*next_char);
+			r -= u64::from(*occurrence);
+			fallback = Some(draw);
 		}
 
 		// Fallback: safety measure; should not happen if invariants hold
@@ -168,6 +186,23 @@ mod tests {
 	fn add_transition_counts_each_occurrence() {
 		let state = state_with(&['a', 'b', 'a', 'a']);
 		assert_eq!(state.sorted_transitions(), vec![('a', 3), ('b', 1)]);
+	}
+
+	#[test]
+	fn draw_gives_the_odds_of_the_letter() {
+		let state = state_with(&['a', 'b', 'a']);
+		for _ in 0..100 {
+			let draw = state.draw().expect("a state with transitions must draw");
+			let odds = (draw.count, draw.total, draw.choices);
+			match draw.letter {
+				'a' => assert_eq!(odds, (2, 3, 2)),
+				'b' => assert_eq!(odds, (1, 3, 2)),
+				other => panic!("unexpected letter {other}"),
+			}
+		}
+		// A single transition is forced
+		assert_eq!(state_with(&['x', 'x']).draw(), Some(Draw { letter: 'x', count: 2, total: 2, choices: 1 }));
+		assert_eq!(state_with(&[]).draw(), None);
 	}
 
 	#[test]

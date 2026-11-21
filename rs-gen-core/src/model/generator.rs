@@ -1,6 +1,8 @@
 use crate::io;
 use crate::model::multigram_model::{MultiGramModel, END_CHAR, START_CHAR};
 use crate::model::prediction_input::{PredictionInput, StartSeed};
+use crate::model::state::Draw;
+use crate::model::trace::{LetterTrace, SeedTrace, Step, WordTrace};
 use rand::Rng;
 use std::cmp::{max, min};
 use std::collections::HashMap;
@@ -85,6 +87,115 @@ impl<'m, 'a> ModelDraw<'m, 'a> {
 		self.remaining_weight -= self.models[index].1;
 		self.remaining -= 1;
 		Some(self.models[index].0)
+	}
+}
+
+/// What a generation tells, step by step. `predict` uses `NoTrace`, whose empty methods the
+/// compiler removes; `predict_with_trace` uses `Tracer`.
+trait Recorder {
+	/// A new attempt starts: what was told about the previous one is dropped, but the refused words.
+	fn begin(&mut self) {}
+
+	/// The word starts with `text`, drawn from `model` or given as it is.
+	fn seed(&mut self, _text: &str, _model: Option<&MultiGramModel>) {}
+
+	/// The next letter is looked for with the order `n`, drawn at random or not.
+	fn order(&mut self, _n: usize, _random: bool) {}
+
+	/// `model` could not continue the word: the next model is tried.
+	fn fallback(&mut self, _model: &MultiGramModel) {}
+
+	/// No model could continue the word with the order `n`: a smaller one is tried.
+	fn reduction(&mut self, _n: usize) {}
+
+	/// `model` gave the next letter, or the end, from the last `n - 1` letters of `prefix`.
+	fn letter(&mut self, _model: &MultiGramModel, _prefix: &str, _n: usize, _letter: Draw) {}
+
+	/// `word` was refused: a training file holds it.
+	fn rejected(&mut self, _word: &str) {}
+}
+
+/// Tells nothing.
+struct NoTrace;
+
+impl Recorder for NoTrace {}
+
+/// Builds the `WordTrace` of a generation.
+#[derive(Default)]
+struct Tracer {
+	seed: Option<SeedTrace>,
+	letters: Vec<LetterTrace>,
+	end: Option<Step>,
+	rejected: Vec<String>,
+
+	// The letter on its way
+	random_n: bool,
+	fallbacks: Vec<String>,
+	reductions: Vec<usize>,
+}
+
+impl Tracer {
+	/// The trace of `word`, the word the generation gave.
+	fn finish(self, word: String) -> Result<WordTrace, String> {
+		let end = self.end.ok_or("The generation ended without its end")?;
+		Ok(WordTrace { word, seed: self.seed, letters: self.letters, end, rejected: self.rejected })
+	}
+}
+
+impl Recorder for Tracer {
+	fn begin(&mut self) {
+		self.seed = None;
+		self.letters.clear();
+		self.end = None;
+	}
+
+	fn seed(&mut self, text: &str, model: Option<&MultiGramModel>) {
+		self.seed = Some(SeedTrace { text: text.to_owned(), model: model.map(|model| model.get_name().to_owned()) });
+	}
+
+	fn order(&mut self, _n: usize, random: bool) {
+		self.random_n = random;
+		self.fallbacks.clear();
+		self.reductions.clear();
+	}
+
+	fn fallback(&mut self, model: &MultiGramModel) {
+		self.fallbacks.push(model.get_name().to_owned());
+	}
+
+	fn reduction(&mut self, n: usize) {
+		// Every model was tried with this order: they are told by the reduction
+		self.fallbacks.clear();
+		self.reductions.push(n);
+	}
+
+	fn letter(&mut self, model: &MultiGramModel, prefix: &str, n: usize, letter: Draw) {
+		let context = MultiGramModel::last_n_chars(prefix, n - 1);
+		let (at_start, context) = match context.strip_prefix(START_CHAR) {
+			Some(rest) => (true, rest),
+			None => (false, context),
+		};
+		let step = Step {
+			model: model.get_name().to_owned(),
+			fallbacks: std::mem::take(&mut self.fallbacks),
+			n,
+			random_n: self.random_n,
+			reductions: std::mem::take(&mut self.reductions),
+			context: context.to_owned(),
+			at_start,
+			count: letter.count,
+			total: letter.total,
+			choices: letter.choices,
+		};
+		if letter.letter == END_CHAR {
+			self.end = Some(step);
+		} else {
+			self.letters.push(LetterTrace { letter: letter.letter, step });
+		}
+	}
+
+	fn rejected(&mut self, word: &str) {
+		self.rejected.push(word.to_owned());
 	}
 }
 
@@ -230,10 +341,12 @@ impl Generator {
 	/// - Handles `StartSeed::None`, `StartSeed::Random`, `StartSeed::Custom`.
 	/// - Iterates over characters safely (UTF-8 aware).
 	/// - Loops until no next character is returned.
-	fn internal_predict(&self, models: &[(&MultiGramModel, f64)], prediction_input: &PredictionInput) -> Result<String, String> {
+	/// - Tells `recorder` each step: the seed, each order, fallback, reduction and letter.
+	fn internal_predict<R: Recorder>(&self, models: &[(&MultiGramModel, f64)], prediction_input: &PredictionInput, recorder: &mut R) -> Result<String, String> {
 		if models.is_empty() {
 			return Err("No model available for prediction".to_owned());
 		}
+		recorder.begin();
 
 		let max_n: usize = if prediction_input.max_n < 2 { 0 } else { prediction_input.max_n };
 
@@ -260,6 +373,7 @@ impl Generator {
 				};
 				if word.starts_with(START_CHAR) { word.remove(0); }
 				global_prefix = word.clone();
+				recorder.seed(&word, Some(model));
 			}
 			StartSeed::Custom(s) => {
 				// A marker would start or end the word inside the seed
@@ -268,6 +382,7 @@ impl Generator {
 				}
 				word = (*s).to_owned();
 				global_prefix = word.clone();
+				recorder.seed(&word, None);
 			}
 		}
 
@@ -275,13 +390,15 @@ impl Generator {
 			global_prefix.insert(0, START_CHAR);
 		}
 
-		let mut n = Generator::compute_n(global_prefix.chars().count(), max_n, prediction_input.randomness())?;
+		let (mut n, random_n) = Generator::compute_n(global_prefix.chars().count(), max_n, prediction_input.randomness())?;
+		recorder.order(n, random_n);
 		loop {
-			match model.predict(&global_prefix, n)? {
-				Some(c) => {
-					global_prefix.push(c);
-					if c != END_CHAR {
-						word.push(c);
+			match model.draw(&global_prefix, n)? {
+				Some(letter) => {
+					recorder.letter(model, &global_prefix, n, letter);
+					global_prefix.push(letter.letter);
+					if letter.letter != END_CHAR {
+						word.push(letter.letter);
 					} else {
 						break;
 					}
@@ -289,6 +406,7 @@ impl Generator {
 				None => {
 					// Next model in the weighted random order
 					if let Some(next) = draw.next() {
+						recorder.fallback(model);
 						model = next;
 						continue;
 					}
@@ -296,13 +414,16 @@ impl Generator {
 					if n <= 2 {
 						return Err("No model can continue the prefix".to_owned());
 					}
+					recorder.reduction(n);
 					n = Generator::reduce_n(n, prediction_input);
 					model = draw.restart();
 					continue;
 				}
 			};
 
-			n = Generator::compute_n(global_prefix.chars().count(), max_n, prediction_input.randomness())?;
+			let (next_n, random_n) = Generator::compute_n(global_prefix.chars().count(), max_n, prediction_input.randomness())?;
+			n = next_n;
+			recorder.order(n, random_n);
 			model = draw.restart();
 		}
 
@@ -323,8 +444,8 @@ impl Generator {
 		}
 	}
 
-	/// Compute next n
-	fn compute_n(prefix_size: usize, max_n: usize, randomness: f32) -> Result<usize, String> {
+	/// Computes the next n, and whether it was drawn at random
+	fn compute_n(prefix_size: usize, max_n: usize, randomness: f32) -> Result<(usize, bool), String> {
 		let key_len = prefix_size;
 		let n = if max_n == 0 {
 			key_len + 1
@@ -346,14 +467,15 @@ impl Generator {
 	/// - `default`: Default n-gram size used when randomness is not applied.
 	///
 	/// # Returns
-	/// - `Ok(usize)`: Either `default` or a randomly selected value in the range `[2, max]`.
+	/// - `Ok((usize, bool))`: Either `default` or a randomly selected value in the range
+	///   `[2, max]`, and true for the latter.
 	/// - `Err(String)`: If `randomness` is outside the valid range.
 	///
 	/// # Behavior
 	/// - With probability `randomness`, selects a random value in `[2, max]`.
 	/// - Otherwise, returns `default`.
 	/// - Ensures the returned n-gram size is always at least 2.
-	fn compute_randomness(randomness: f32, max: usize, default: usize) -> Result<usize, String> {
+	fn compute_randomness(randomness: f32, max: usize, default: usize) -> Result<(usize, bool), String> {
 		if !(0.0..=1.0).contains(&randomness) {
 			Err(format!(
 				"randomness must be between 0.0 and 1.0, got {randomness}"
@@ -361,10 +483,10 @@ impl Generator {
 		}
 
 		if randomness > 0.0 && rand::rng().random_range(0.0..=1.0) <= randomness {
-			return Ok(rand::rng().random_range(2..=max.max(2)));
+			return Ok((rand::rng().random_range(2..=max.max(2)), true));
 		}
 
-		Ok(default)
+		Ok((default, false))
 	}
 
 	/// Generates a sequence using multiple models while avoiding duplicates.
@@ -374,11 +496,27 @@ impl Generator {
 	/// - Checks for duplicates against all loaded models up to `nb_try`.
 	/// - Returns the first non-duplicate or the last attempt if all fail.
 	pub fn predict(&self, prediction_input: &PredictionInput) -> Result<String, String> {
+		self.recorded_predict(prediction_input, &mut NoTrace)
+	}
+
+	/// Generates a word as `predict` does, and tells how: the seed, each letter with its model,
+	/// its odds, the fallbacks and reductions it took, the end, and the words refused before.
+	///
+	/// # Errors
+	/// The errors of `predict`.
+	pub fn predict_with_trace(&self, prediction_input: &PredictionInput) -> Result<WordTrace, String> {
+		let mut tracer = Tracer::default();
+		let word = self.recorded_predict(prediction_input, &mut tracer)?;
+		tracer.finish(word)
+	}
+
+	/// The generation of `predict`, telling `recorder` each step.
+	fn recorded_predict<R: Recorder>(&self, prediction_input: &PredictionInput, recorder: &mut R) -> Result<String, String> {
 		if self.models.is_empty() {
 			return Err("No models available for prediction".to_owned());
 		}
 		let models = self.weighted_models(prediction_input);
-		let mut word = self.internal_predict(&models, prediction_input)?;
+		let mut word = self.internal_predict(&models, prediction_input, recorder)?;
 		let mut nb_try = prediction_input.nb_try;
 
 		loop {
@@ -388,7 +526,8 @@ impl Generator {
 				let lowercase_word = word.to_lowercase();
 				exists = self.models.values().any(|model| model.contains_lowercase(&lowercase_word));
 				if exists {
-					word = self.internal_predict(&models, prediction_input)?;
+					recorder.rejected(&word);
+					word = self.internal_predict(&models, prediction_input, recorder)?;
 					nb_try -= 1;
 				}
 			}
@@ -547,6 +686,157 @@ mod tests {
 			input.start_seed = StartSeed::Custom(seed.clone());
 			assert!(generator.predict(&input).is_err(), "{seed:?}");
 		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	// Runs `count` traced predictions in another thread, as `predict_within_deadline`
+	fn traces_within_deadline(generator: Generator, input: PredictionInput, count: usize) -> Vec<WordTrace> {
+		let (tx, rx) = mpsc::channel();
+		std::thread::spawn(move || {
+			let traces: Vec<WordTrace> = (0..count).map(|_| generator.predict_with_trace(&input).expect("a trace")).collect();
+			let _ = tx.send(traces);
+		});
+		rx.recv_timeout(Duration::from_secs(10)).expect("the generation did not end within 10 seconds")
+	}
+
+	// The word a trace spells: its seed, then its letters
+	fn spelled(trace: &WordTrace) -> String {
+		let seed = trace.seed.as_ref().map_or("", |seed| seed.text.as_str());
+		let letters: String = trace.letters.iter().map(|letter| letter.letter).collect();
+		format!("{seed}{letters}")
+	}
+
+	// The steps of a trace: each letter, then the end
+	fn steps(trace: &WordTrace) -> impl Iterator<Item = &Step> {
+		trace.letters.iter().map(|letter| &letter.step).chain(std::iter::once(&trace.end))
+	}
+
+	#[test]
+	fn a_trace_spells_its_word() {
+		let (generator, dir) = generator_with("trace-spells", &[("low", "abc\nbca\ncab\nabd\n"), ("up", "xyz\nyzx\nzxy\nxya\n")]);
+		let mut input = generator.make_prediction_input();
+		input.set_randomness(0.3).unwrap();
+		input.reduce_random = true;
+		for trace in traces_within_deadline(generator, input, 200) {
+			assert_eq!(spelled(&trace), trace.word);
+			for step in steps(&trace) {
+				assert!(step.count >= 1 && u64::from(step.count) <= step.total && step.choices >= 1, "{step:?}");
+				// The context is the last n - 1 letters looked at, the start marker included
+				assert_eq!(step.context.chars().count() + usize::from(step.at_start), step.n - 1, "{step:?}");
+			}
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_trace_names_the_model_of_each_letter() {
+		let (generator, dir) = generator_with("trace-models", &[("low", "abc\nbca\ncab\n"), ("up", "xyz\nyzx\nzxy\n")]);
+		let input = generator.make_prediction_input();
+		for trace in traces_within_deadline(generator, input, 100) {
+			for letter in &trace.letters {
+				let expected = if "abc".contains(letter.letter) { "low" } else { "up" };
+				assert_eq!(letter.step.model, expected, "{trace:?}");
+			}
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_letter_without_choice_is_forced() {
+		let (generator, dir) = generator_with("trace-forced", &[("low", "abc\n")]);
+		let input = generator.make_prediction_input();
+		let trace = traces_within_deadline(generator, input, 1).remove(0);
+		assert_eq!(trace.word, "abc");
+		for step in steps(&trace) {
+			assert_eq!((step.count, step.total, step.choices), (1, 1, 1));
+			assert!(step.fallbacks.is_empty() && step.reductions.is_empty() && !step.random_n, "{step:?}");
+		}
+		// The first letter looks at the start of the word only, the second one at "a" after it
+		let context = |step: &Step| (step.context.clone(), step.at_start, step.n);
+		assert_eq!(context(&trace.letters[0].step), (String::new(), true, 2));
+		assert_eq!(context(&trace.letters[1].step), ("a".to_owned(), true, 3));
+		assert_eq!(context(&trace.end), ("abc".to_owned(), true, 5));
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_trace_names_the_models_tried_before() {
+		// Only "up" knows how "x" goes on: when "low" is drawn first, it is a fallback
+		let (generator, dir) = generator_with("trace-fallbacks", &[("low", "ab\n"), ("up", "xy\n")]);
+		let mut input = generator.make_prediction_input();
+		input.set_model_intensity("low", 99.0).unwrap();
+		input.set_model_intensity("up", 1.0).unwrap();
+		input.start_seed = StartSeed::Custom("x".to_owned());
+		let traces = traces_within_deadline(generator, input, 50);
+		for trace in &traces {
+			let first = &trace.letters[0];
+			assert_eq!((first.letter, first.step.model.as_str()), ('y', "up"));
+			assert!(first.step.fallbacks.is_empty() || first.step.fallbacks == ["low"], "{trace:?}");
+		}
+		// "low" is drawn first 99 times out of 100
+		assert!(traces.iter().any(|trace| trace.letters[0].step.fallbacks == ["low"]));
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_trace_names_the_orders_given_up() {
+		// No model knows the start "ba" nor "ba": the orders 4 and 3 are given up, "a" gives "b"
+		let (generator, dir) = generator_with("trace-reductions", &[("low", "abc\n")]);
+		let mut input = generator.make_prediction_input();
+		input.start_seed = StartSeed::Custom("ba".to_owned());
+		let trace = traces_within_deadline(generator, input, 1).remove(0);
+		assert_eq!(trace.word, "babc");
+		let first = &trace.letters[0];
+		assert_eq!((first.letter, first.step.n, first.step.context.as_str()), ('b', 2, "a"));
+		assert_eq!(first.step.reductions, [4, 3]);
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn every_order_is_random_with_a_full_randomness() {
+		let (generator, dir) = generator_with("trace-random-n", &[("low", "abc\nabd\n")]);
+		let mut input = generator.make_prediction_input();
+		input.set_randomness(1.0).unwrap();
+		for trace in traces_within_deadline(generator, input, 20) {
+			assert!(steps(&trace).all(|step| step.random_n), "{trace:?}");
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_trace_lists_the_words_refused() {
+		// The only word of the model always exists: each attempt is refused, up to nb_try
+		let (generator, dir) = generator_with("trace-rejected", &[("low", "abc\n")]);
+		let mut input = generator.make_prediction_input();
+		input.nb_try = 3;
+		let trace = traces_within_deadline(generator, input, 1).remove(0);
+		assert_eq!(trace.word, "abc");
+		assert_eq!(trace.rejected, ["abc", "abc", "abc"]);
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_seed_is_traced_apart_from_the_letters() {
+		let (generator, dir) = generator_with("trace-seed", &[("low", "abc\n")]);
+		let mut input = generator.make_prediction_input();
+		input.start_seed = StartSeed::Custom("ab".to_owned());
+		let trace = generator.predict_with_trace(&input).unwrap();
+		assert_eq!(trace.seed, Some(SeedTrace { text: "ab".to_owned(), model: None }));
+		assert_eq!(trace.letters.iter().map(|letter| letter.letter).collect::<String>(), "c");
+		// A seed drawn from a model names it
+		input.start_seed = StartSeed::Random(3);
+		let trace = generator.predict_with_trace(&input).unwrap();
+		assert_eq!(trace.seed.as_ref().and_then(|seed| seed.model.as_deref()), Some("low"));
+		assert_eq!(spelled(&trace), trace.word);
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn predict_with_trace_gives_the_word_of_predict() {
+		let (generator, dir) = generator_with("trace-same-word", &[("low", "abc\n")]);
+		let input = generator.make_prediction_input();
+		assert_eq!(generator.predict(&input), Ok("abc".to_owned()));
+		assert_eq!(generator.predict_with_trace(&input).map(|trace| trace.word), Ok("abc".to_owned()));
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 

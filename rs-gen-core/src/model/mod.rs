@@ -37,3 +37,6 @@ mod state;
 /// model intensities, and normalized model selection probabilities.
 /// Used internally by `Generator`.
 pub mod prediction_input;
+
+/// How a word was generated, letter by letter (`Generator::predict_with_trace`).
+pub mod trace;

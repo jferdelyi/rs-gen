@@ -1,4 +1,5 @@
 use super::ngram_model::NGramModel;
+use super::state::Draw;
 use crate::hash::{FastHashMap, FastHashSet};
 use crate::io::{build_output_path, get_filename};
 use serde::{Deserialize, Serialize};
@@ -456,7 +457,7 @@ impl MultiGramModel {
 	}
 
 	/// Returns the last `n` characters of a string (UTF-8 safe), without copying them.
-	fn last_n_chars(s: &str, n: usize) -> &str {
+	pub(crate) fn last_n_chars(s: &str, n: usize) -> &str {
 		if n == 0 {
 			return "";
 		}
@@ -504,19 +505,16 @@ impl MultiGramModel {
 		key: &str,
 		n: usize
 	) -> Result<Option<char>, String> {
+		Ok(self.draw(key, n)?.map(|draw| draw.letter))
+	}
+
+	/// Predicts the next character as `predict` does, with the odds it had.
+	pub(crate) fn draw(&self, key: &str, n: usize) -> Result<Option<Draw>, String> {
 		// No model below 2, and the key must hold at least n - 1 characters
 		if n < 2 || key.chars().count() < n - 1 {
 			return Ok(None);
 		}
-		let mut next_char = None;
-		if let Some(model) = self.ngrams.get(&n) {
-			let prefix = Self::last_n_chars(key, n - 1);
-			if let Some(c) = model.predict(prefix) {
-				next_char = Some(c);
-			}
-		}
-
-		Ok(next_char)
+		Ok(self.ngrams.get(&n).and_then(|model| model.draw(Self::last_n_chars(key, n - 1))))
 	}
 
 	/// Checks if a word already exists in the model, ignoring case.

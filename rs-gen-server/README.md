@@ -29,7 +29,7 @@ The server reads `./data` relative to its working directory and listens on `127.
 cargo run --release -p rs-gen-server
 ```
 
-A generation that cannot continue (for instance a `custom:` seed with a character that no model knows) answers `500` with the reason in the body; invalid parameters answer `400`, among them a `nb_try` above 1000 and a `custom:` seed holding U+0002 or U+0003, the markers of the start and the end of a word.
+`GET /v1/generate` answers the word as text, or its trace in JSON with `trace=true` (letter by letter: model, odds, fallbacks, reductions; see the README at the root). A generation that cannot continue (for instance a `custom:` seed with a character that no model knows) answers `500` with the reason in the body; invalid parameters answer `400`, among them a `nb_try` above 1000 and a `custom:` seed holding U+0002 or U+0003, the markers of the start and the end of a word.
 
 ## Admin
 

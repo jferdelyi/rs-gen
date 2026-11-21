@@ -1,4 +1,4 @@
-use super::state::State;
+use super::state::{Draw, State};
 use crate::hash::{FastHashMap, FastHasher};
 use rand::Rng;
 use serde::de::{MapAccess, Visitor};
@@ -261,6 +261,11 @@ impl NGramModel {
 	/// # Notes
 	/// - Converts the prefix to lowercase to match stored states.
 	pub fn predict(&self, prefix: &str) -> Option<char> {
+		self.draw(prefix).map(|draw| draw.letter)
+	}
+
+	/// Predicts the next character as `predict` does, with the odds it had.
+	pub(crate) fn draw(&self, prefix: &str) -> Option<Draw> {
 		// Generated prefixes are already lowercase: they are looked up without a copy
 		let state = if prefix.chars().all(|c| c.to_lowercase().eq(std::iter::once(c))) {
 			self.get(prefix)
@@ -271,7 +276,7 @@ impl NGramModel {
 				.collect();
 			self.get(key.as_str())
 		};
-		state?.predict()
+		state?.draw()
 	}
 
 	/// Merges another n-gram model into this one.

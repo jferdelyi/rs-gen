@@ -153,6 +153,27 @@ http://127.0.0.1:5000/v1/generate?max_n=0&nb_try=100&randomness=0.1&reduce_rando
 | `reduce_random` | Apply randomness again during key reduction (highly exploratory results)                 |
 | `seed`          | `custom:<string>` or `random:<n>` (N-gram order of the starting key, `0` = random)      |
 | `intensity`     | Model weights formatted as `<database>:<value>`; values are normalized before prediction |
+| `trace`         | `true`: the answer is the trace of the word in JSON (see below) instead of the word as text |
+
+With `trace=true`, the answer tells how the word was made:
+
+```json
+{
+  "word": "abc",
+  "seed": null,
+  "letters": [
+    { "letter": "a", "model": "low", "fallbacks": [], "n": 2, "random_n": false, "reductions": [],
+      "context": "", "at_start": true, "count": 1, "total": 1, "choices": 1 }
+  ],
+  "end": { "model": "low", "fallbacks": [], "n": 5, "random_n": false, "reductions": [],
+           "context": "abc", "at_start": true, "count": 1, "total": 1, "choices": 1 },
+  "rejected": []
+}
+```
+
+- `seed`: the start given to the generation, `{ "text", "model" }`; `model` names the model of a `random:` seed. The seed followed by the letters spells the word.
+- For each letter and for the end: the model that gave it, the models tried before it that could not continue (`fallbacks`), the order `n` and whether it was drawn at random (`random_n`), the orders given up because no model knew the context (`reductions`), the letters looked at (`context`, and `at_start` when they start at the start of the word), and its odds: `count` of the `total` occurrences of the context, among `choices` letters (`1`: forced).
+- `rejected`: the words refused before this one because a training file holds them (`nb_try`).
 
 ---
 
