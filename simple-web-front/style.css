@@ -143,50 +143,35 @@ button {
   flex: 1;
 }
 
-/* Icon button for reset / GitHub */
+/* Icon buttons (reset, GitHub, admin): squares drawn as the action buttons, the icon written
+   in the page in the color of the button */
 .icon-btn {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 38px;
   height: 38px;
-  border-radius: 12px;
-  border: 1px solid transparent;
-  background: transparent;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--action-border);
+  background: var(--action);
+  color: var(--on-action);
   cursor: pointer;
   transition: background 0.15s ease, transform 0.05s ease;
-  padding: 0;
 }
 
-.icon-btn img {
-  width: 32px;
-  height: 32px;
+.icon-btn svg {
+  width: 18px;
+  height: 18px;
 }
 
 .icon-btn:hover {
-  background: var(--icon-hover);
+  background: var(--action-hover);
 }
 
 .icon-btn:active {
   transform: scale(0.96);
-}
-
-/* Link to the admin page: faded until hovered, narrow enough to keep
-   "Copy API URL" on one line on a 375 px phone */
-.admin-link {
-  width: 30px;
-}
-
-.admin-link img {
-  width: 26px;
-  height: 26px;
-  opacity: 0.45;
-  transition: opacity 0.15s ease;
-}
-
-.admin-link:hover img,
-.admin-link:focus-visible img {
-  opacity: 1;
 }
 
 /* =========================
@@ -373,5 +358,14 @@ input[type="checkbox"] {
 
   .seed-option {
     grid-template-columns: 24px 1fr minmax(40px, 1fr);
+  }
+
+  /* The square icon buttons leave less room: "Copy API URL" stays on one line at 360 px */
+  .action-buttons {
+    gap: 8px;
+  }
+
+  .action-btn {
+    padding: 10px 8px;
   }
 }

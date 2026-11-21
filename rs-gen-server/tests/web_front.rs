@@ -461,6 +461,48 @@ fn a_hidden_model_card_is_drawn_apart_from_a_shown_one() {
 	assert_eq!(value("border-style"), Some("dashed"));
 }
 
+/// The value of a property in the rules of a style sheet whose selector list holds `selector`.
+fn property<'r>(rules: &'r [Rule], selector: &str, property: &str) -> Option<&'r str> {
+	rules
+		.iter()
+		.filter(|r| r.selector.split(',').any(|s| s.trim() == selector))
+		.flat_map(|r| r.declarations.iter())
+		.find(|(p, _)| p == property)
+		.map(|(_, v)| v.as_str())
+}
+
+#[test]
+fn the_icon_buttons_are_drawn_like_the_other_buttons() {
+	// The reset arrow, the GitHub logo and the faded lock had three sizes and three weights:
+	// they are drawn as the dark buttons next to them, their icon in the page in the color
+	// of the button, named for the screen readers
+	let tags = tags(&front("index.html"));
+	let icon_buttons: Vec<&Tag> = tags.iter().filter(|t| t.has_class("icon-btn")).collect();
+	assert_eq!(icon_buttons.len(), 3, "three icon buttons expected in index.html");
+	for button in &icon_buttons {
+		assert!(button.get("aria-label").is_some_and(|l| !l.is_empty()), "<{} {:?}> has no name", button.name, button.get("id"));
+	}
+	assert!(!tags.iter().any(|t| t.name == "img"), "index.html draws an icon with <img>");
+	let icons: Vec<&Tag> = tags.iter().filter(|t| t.name == "svg").collect();
+	assert_eq!(icons.len(), 3, "one icon in the page per icon button");
+	assert!(icons.iter().all(|svg| svg.get("aria-hidden") == Some("true")), "an icon is read by the screen readers");
+	let style = rules(&front("style.css"));
+	assert_eq!(property(&style, ".icon-btn", "background"), Some("var(--action)"));
+	assert_eq!(property(&style, ".icon-btn", "color"), Some("var(--on-action)"));
+	assert!(!style.iter().any(|r| r.selector.contains(".admin-link")), "the admin link is still drawn apart");
+}
+
+#[test]
+fn copy_api_url_stays_on_one_line_on_a_phone() {
+	// With square icon buttons, "Copy API URL" took two lines at 375 px in WebKit: on a narrow
+	// screen the row is tighter, one line at 360 and 375 px
+	let css = without_comments(&front("style.css"));
+	let (_, narrow) = css.split_once("@media (max-width: 600px)").expect("no narrow screen block in style.css");
+	let narrow = rules(narrow);
+	assert_eq!(property(&narrow, ".action-buttons", "gap"), Some("8px"));
+	assert_eq!(property(&narrow, ".action-btn", "padding"), Some("10px 8px"));
+}
+
 #[test]
 fn the_parsers_of_these_tests_read_the_files() {
 	// Positive controls: without them, a check that finds nothing would prove nothing

@@ -9,7 +9,7 @@ Static web pages to play with the generator and to manage its models. No build s
 
 | File | Role |
 |---|---|
-| `index.html` | The generator page: model weights, parameters, generated words. |
+| `index.html` | The generator page: model weights, parameters, generated words. The icons of its reset, GitHub and admin buttons are written in the page, in the color of the button. |
 | `script.js` | Calls `GET /v1/models` and `GET /v1/generate`, and keeps the settings in the browser. |
 | `tooltip.js` | The tooltips of both pages, drawn from the `title` of each control: after a short hover, at once on a keyboard focus, and when a field to type in takes the focus. |
 | `theme.css` | Every color of both pages, as tokens (`--surface`, `--focus`...), loaded before `style.css`. |
@@ -19,7 +19,6 @@ Static web pages to play with the generator and to manage its models. No build s
 | `admin.css` | What the admin page adds to `style.css`: model cards, figures, messages, delete button. |
 | `icon.svg`, `icon-32.png`, `icon-192.png` | Icon of the pages, in the browser tab and on Android. |
 | `apple-touch-icon.png` | Icon of the generator page on the iOS home screen: square, iOS rounds the corners itself. |
-| `github-icon.svg`, `reload.svg`, `admin-icon.svg` | Icons of the links and buttons; the faded lock of the generator page leads to the admin page. |
 
 ## Accessibility
 
