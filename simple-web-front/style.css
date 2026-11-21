@@ -389,6 +389,7 @@ input[type="checkbox"] {
   color: var(--terminal-muted);
   font-weight: normal;
   text-align: left;
+  white-space: nowrap;
 }
 
 .trace-table td {
@@ -434,14 +435,21 @@ input[type="checkbox"] {
     display: table-row;
   }
 
-  /* Tighter, so that the four columns fit 250 px */
+  /* Tighter, so that the five columns fit 280 px */
   .trace-table {
     font-size: 11px;
   }
 
   .trace-table th,
   .trace-table td {
-    padding-right: 6px;
+    padding-right: 4px;
+  }
+}
+
+/* The narrowest trace, as on a 320 px phone: the letters looked at give way too */
+@container trace (max-width: 280px) {
+  .col-context {
+    display: none;
   }
 }
 
@@ -471,16 +479,19 @@ input[type="checkbox"] {
   gap: 8px;
 }
 
-/* The close button of the bubble, kept at the top while the bubble scrolls */
-.trace-bar {
+/* The buttons stay at the bottom while the trace scrolls; close on the right, at hand on a
+   phone */
+.trace-buttons {
   position: sticky;
-  top: -14px;
+  bottom: -14px;
   z-index: 1;
-  display: flex;
-  justify-content: flex-end;
-  margin: -14px -16px -6px;
-  padding: 8px 16px 6px;
+  margin: 0 -16px -14px;
+  padding: 8px 16px 14px;
   background: var(--terminal-raised);
+}
+
+.trace-close {
+  margin-left: auto;
 }
 
 /* How to read a trace, opened on demand */
@@ -731,11 +742,12 @@ input[type="checkbox"] {
 /* A very wide screen: how a word was made, right of the terminal. script.js draws it there
    at the same width, in a bubble below it */
 @media (min-width: 1360px) {
-  /* The trace takes the room left, up to 640 px, inside a margin of 24 px on each side */
+  /* The console in the middle: the weights and the trace share the room left, one width for
+     both, up to 560 px, inside a margin of 24 px on each side */
   .generator-app {
-    max-width: 1666px;
+    max-width: 1816px;
     padding: 0 24px;
-    grid-template-columns: 330px 600px minmax(330px, 640px);
+    grid-template-columns: minmax(330px, 1fr) 600px minmax(330px, 1fr);
     grid-template-areas: "weights generator word";
   }
 

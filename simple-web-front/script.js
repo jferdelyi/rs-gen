@@ -522,7 +522,8 @@ const TRACE_COLUMNS = [
     ["#", "col-index", "Position of the letter in the word"],
     ["letter", "", "The letter, in the color of the model that gave it"],
     ["model", "", "The model that gave the letter"],
-    ["after", "", "The letters looked at to choose this one; ^ is the start of the word"],
+    ["n-gram", "", "The order used: the letters looked at, plus one. ⚄: drawn at random (Randomness). 10→6: shortened, no model knew the longer context"],
+    ["after", "col-context", "The letters looked at to choose this one; ^ is the start of the word"],
     ["chance", "", "How often this letter came after them in the training words of the model"],
     ["event", "col-event", "What happened while this letter was chosen"],
 ];
@@ -530,6 +531,7 @@ const TRACE_COLUMNS = [
 // How to read a trace: shown on demand, read on a phone as well, where there is no tooltip
 const TRACE_HELP = [
     "Each letter comes from one model, drawn at random according to the weights.",
+    "n-gram: the order used, the letters looked at plus one; ⚄ when Randomness drew it, 10→6 when it had to be shortened.",
     "after: the letters the model looked at before choosing; ^ is the start of the word.",
     "chance: how often this letter came after them in the training words of the model.",
     "had never seen these letters: the model drawn first knew nothing after them, so the next one was tried.",
@@ -589,10 +591,18 @@ function renderTrace(trace, container) {
         cell(row, index, "col-index trace-muted");
         cell(row, letter, letterClass, isEnd ? "End of the word" : "");
         cell(row, labelOf(step.model));
+        // The order: shortened, the first one tried and the one used; every step in the tooltip
+        const shortened = step.reductions.length > 0;
+        const orderTip = [
+            shortened ? `Shortened ${[...step.reductions, step.n].join(" → ")}: no model knew the longer context` : "",
+            step.random_n ? "Drawn at random (Randomness)" : "",
+        ].filter(Boolean).join(". ");
+        const order = shortened ? `${step.reductions[0]}→${step.n}` : String(step.n);
+        cell(row, order + (step.random_n ? " ⚄" : ""), shortened ? "trace-danger" : step.random_n ? "trace-warning" : "", orderTip);
         // The letters looked at: the last 6 only when they are many, all of them in the tooltip
         const context = [...step.context];
         const shown = context.length > 7 ? `…${context.slice(-6).join("")}` : `${step.at_start ? "^" : ""}${step.context}`;
-        cell(row, shown, "", `Looked at ${step.at_start ? "the start of the word" : ""}${step.at_start && context.length > 0 ? " and " : ""}${context.length > 0 ? `"${step.context}"` : ""}`);
+        cell(row, shown, "col-context", `Looked at ${step.at_start ? "the start of the word" : ""}${step.at_start && context.length > 0 ? " and " : ""}${context.length > 0 ? `"${step.context}"` : ""}`);
         cell(row, percent(step.count, step.total), "",
             `${step.count} of ${step.total} times, among ${step.choices} possible ${step.choices === 1 ? "letter" : "letters"}`);
         // The event, in its column; on a narrow trace, on its own line under the letter
@@ -652,10 +662,9 @@ function renderTrace(trace, container) {
     buttons.append(copy, man);
     parts.push(buttons);
 
-    // The bubble can fill a phone: its close button stays at the top while it scrolls
+    // The bubble can fill a phone: its close button stays at hand, at the bottom right
     if (container === wordBubble) {
-        const bar = element("div", "trace-bar");
-        const close = element("button", "term-btn", "[ close ]");
+        const close = element("button", "term-btn trace-close", "[ close ]");
         close.title = "Close (Escape)";
         close.addEventListener("click", () => {
             hideBubble();
@@ -664,8 +673,7 @@ function renderTrace(trace, container) {
                 shownWord.focus();
             }
         });
-        bar.appendChild(close);
-        parts.unshift(bar);
+        buttons.appendChild(close);
     }
 
     container.replaceChildren(...parts);

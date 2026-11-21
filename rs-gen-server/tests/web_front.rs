@@ -572,8 +572,8 @@ fn the_words_and_their_detail_are_reachable_by_keyboard() {
 #[test]
 fn the_blocks_of_a_wide_screen_share_their_height() {
 	// Three blocks of three heights looked unfinished: the row stretches them to one height.
-	// The weights keep one width on both screens; the trace takes the room left, from the width
-	// of the weights up to 640 px, where its table shows every column
+	// The console stays in the middle: the weights and the trace share the room left, one width
+	// for both, never under the width of the weights on a wide screen
 	let css = without_comments(&front("style.css"));
 	let blocks: Vec<Vec<Rule>> = css.split("@media (min-width: ").skip(1).map(rules).collect();
 	assert_eq!(blocks.len(), 2, "the wide and the very wide screens expected");
@@ -581,7 +581,7 @@ fn the_blocks_of_a_wide_screen_share_their_height() {
 	let wide = property(&blocks[0], ".generator-app", "grid-template-columns").expect("no columns on a wide screen");
 	let very_wide = property(&blocks[1], ".generator-app", "grid-template-columns").expect("no columns on a very wide screen");
 	let weights = wide.split_whitespace().next().expect("no column");
-	assert_eq!(very_wide, format!("{weights} 600px minmax({weights}, 640px)"));
+	assert_eq!(very_wide, format!("minmax({weights}, 1fr) 600px minmax({weights}, 1fr)"));
 	// The Last Word panel takes the height of the row, its trace scrolls inside it
 	assert_eq!(property(&blocks[1], ".word-panel", "contain"), Some("size"));
 }
@@ -596,6 +596,7 @@ fn the_trace_explains_itself_without_tooltips() {
 		("\"How to read this\"", "the help has no title"),
 		("\"[ close ]\"", "the bubble cannot be closed on a phone"),
 		("had never seen these letters", "the fallbacks are not said in words"),
+		("\"n-gram: the order used", "the help does not explain the n-gram column"),
 	] {
 		assert!(script.contains(code), "script.js: {what}");
 	}
